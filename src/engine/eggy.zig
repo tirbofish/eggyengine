@@ -2,8 +2,12 @@
 // const vk = @import("vulkan");
 
 const std = @import("std");
+const signal = @import("signal.zig");
+
 pub const ecs = @import("eggyecs/ecs.zig");
 pub const context = @import("ctx.zig");
+
+var previous_time = 0;
 
 pub fn EggyApp(comptime modules: []const type) type {
     comptime {
@@ -30,12 +34,11 @@ pub fn EggyApp(comptime modules: []const type) type {
                 .delta_time = 0,
             };
             
-            // Default-initialize all modules
+            // default init all modules
             inline for (&self.modules, 0..) |*m, i| {
                 m.* = modules[i]{};
             }
             
-            // Run startup schedule
             self.runSchedule(.startup);
             
             return self;
@@ -47,8 +50,26 @@ pub fn EggyApp(comptime modules: []const type) type {
         }
         
         pub fn run(self: *Self) void {
-            while (self.running) {
-                self.delta_time = 1.0 / 60.0; // TODO: real delta time
+            signal.setupDefaults();
+            
+            var last_time = std.time.nanoTimestamp();
+            var frame_count: u32 = 0;
+            var fps_timer: i128 = 0;
+
+            while (self.running and !signal.wasInterrupted()) {
+                const now = std.time.nanoTimestamp();
+                const delta_ns = now - last_time;
+                last_time = now;
+                
+                self.delta_time = @as(f32, @floatFromInt(delta_ns)) / 1_000_000_000.0;
+                
+                frame_count += 1;
+                fps_timer += delta_ns;
+                if (fps_timer >= 1_000_000_000) {
+                    frame_count = 0;
+                    fps_timer = 0;
+                }
+                
                 self.runSchedule(.update);
                 self.runSchedule(.render);
             }

@@ -17,6 +17,7 @@ const TestingModule = struct {
         .startup = &.{spawn},
         .update = &.{ movement, combat },
         .render = &.{draw},
+        .shutdown = &.{shutdown},
     };
 
     fn spawn(self: *@This(), ctx: *eggy.context.Context) void {
@@ -30,13 +31,14 @@ const TestingModule = struct {
         _ = ctx;
     }
     
-    fn combat(self: *@This(), ctx: *eggy.context.Context) void {
-        _ = self;
-        _ = ctx;
+    fn combat(_: *@This(), _: *eggy.context.Context) void {
     }
     
-    fn draw(self: *@This(), ctx: *eggy.context.Context) void {
-        _ = ctx;
-        std.log.info("counter: {d}", .{self.counter});
+    fn draw(_: *@This(), ctx: *eggy.context.Context) void {
+        std.log.info("fps: {d}", .{ctx.delta_time});
+    }
+
+    fn shutdown(_: *@This(), _: *eggy.context.Context) void {
+        std.log.info("Shutting down", .{});
     }
 };
