@@ -1,10 +1,16 @@
+// all dependencies are suited for zig 0.15.2
+
 .{
     .name = .eggyengine,
     .version = "0.15.2",
     .dependencies = .{
+        .vulkan = .{
+            .url = "git+https://github.com/Snektron/vulkan-zig/?ref=zig-0.15-compat#3ada9e2989bab70090a55f0f6fac19ea90d06357",
+            .hash = "vulkan-0.0.0-r7Ytx6FIAwD3QyrrJhvObO0YSZ6WEkMGSCPKbhM__HFd",
+        },
         .sdl3 = .{
-            .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=v0.1.9#45ffa097ad183a72f81d42f9f8c0df0398663814",
-            .hash = "sdl3-0.1.9-NmT1Q2k0JwAtPRns9E3OO6qpqpvy8mn80guJ8L209AtI",
+            .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=master#6d418ef3ddae99098414a96a88bf5e5fdb41785e",
+            .hash = "sdl3-0.1.9-NmT1QwiEJwByePqkmArtppCHQn8Y7kiSWcncT_Mop8ie",
         },
     },
     .paths = .{""},
