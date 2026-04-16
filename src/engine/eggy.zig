@@ -5,7 +5,8 @@ const std = @import("std");
 const signal = @import("signal.zig");
 
 pub const ecs = @import("eggyecs/ecs.zig");
-pub const context = @import("ctx.zig");
+pub const Context = @import("ctx.zig").Context;
+pub const DefaultModule = @import("mod.zig").DefaultModule;
 
 var previous_time = 0;
 
@@ -76,7 +77,7 @@ pub fn EggyApp(comptime modules: []const type) type {
         }
         
         pub fn runSchedule(self: *Self, comptime schedule: ecs.Schedule) void {
-            var ctx = context.Context{
+            var ctx = Context{
                 .world = &self.world,
                 .allocator = self.allocator,
                 .delta_time = self.delta_time,
@@ -92,7 +93,13 @@ pub fn EggyApp(comptime modules: []const type) type {
                     if (@hasField(@TypeOf(scheds), schedule_name)) {
                         const funcs = @field(scheds, schedule_name);
                         inline for (funcs) |func| {
-                            func(m, &ctx);
+                            const FnInfo = @typeInfo(@TypeOf(func)).@"fn";
+                            switch (FnInfo.params.len) {
+                                0 => func(),
+                                1 => func(&ctx),
+                                2 => func(m, &ctx),
+                                else => @compileError("Schedule function must take 0, 1, or 2 arguments"),
+                            }
                         }
                     }
                 }
