@@ -3,7 +3,7 @@ const eggy = @import("eggy");
 
 pub fn main() !void {
     var app = eggy.EggyApp(&.{
-        
+        eggy.mod.DefaultModule(.{})
     }).init(std.heap.page_allocator);
     defer app.deinit();
     
@@ -18,26 +18,26 @@ const TestingModule = struct {
     counter: u32 = 0,
     
     pub const schedules = .{
-        .startup = &.{spawn},
+        .init = &.{spawn},
         .update = &.{ movement },
         .render = &.{draw},
-        .shutdown = &.{shutdown},
+        .deinit = &.{shutdown},
     };
 
-    fn spawn(_: *@This(), ctx: *eggy.Context) void {
-        _ = ctx.world.spawn(.{
+    fn spawn(_: *@This(), ctx: *eggy.Context) !void {
+        _ = try ctx.world.spawn(.{
             Position{ .x = 0, .y = 0 },
             Velocity{ .dx = 100, .dy = 50 },
             Health{ .current = 100, .max = 100 },
-        }) catch return;
+        });
     
-        _ = ctx.world.spawn(.{
+        _ = try ctx.world.spawn(.{
             Position{ .x = 10, .y = 10 },
             Velocity{ .dx = 200, .dy = 0 },
-        }) catch return;
+        });
     }
     
-    fn movement(_: *@This(), ctx: *eggy.Context) void {
+    fn movement(_: *@This(), ctx: *eggy.Context) !void {
         var q = ctx.world.query_mut(struct { 
             pos: Position, 
             vel: Velocity 
@@ -54,7 +54,7 @@ const TestingModule = struct {
         }
     }
     
-    fn draw(_: *@This(), ctx: *eggy.Context) void {
+    fn draw(_: *@This(), ctx: *eggy.Context) !void {
         std.log.info("fps: {d}", .{1/ctx.delta_time});
     }
 

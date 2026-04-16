@@ -1,12 +1,26 @@
 const std = @import("std");
-const context = @import("../ctx.zig");
+const context = @import("ctx.zig");
 
 pub const Schedule = enum {
-    startup,
+    pre_init,
+    init,
+    post_init,
+    
+    pre_update,
     update,
+    post_update,
+    
+    pre_fixed_update,
     fixed_update,
+    post_fixed_update,
+    
+    pre_render,
     render,
-    shutdown,
+    post_render,
+    
+    pre_deinit,
+    deinit,
+    post_deinit,
 };
 
 pub const Entity = struct {
@@ -155,6 +169,10 @@ pub const World = struct {
     // systems as per schedule
     systems: std.EnumArray(Schedule, std.ArrayListUnmanaged(SystemFn)),
 
+    // resources (singleton data accessible by any system)
+    resources: std.AutoHashMapUnmanaged(usize, *anyopaque),
+    resource_deinit_fns: std.AutoHashMapUnmanaged(usize, *const fn (*anyopaque, std.mem.Allocator) void),
+
     pub fn init(allocator: std.mem.Allocator) World {
         const systems = std.EnumArray(Schedule, std.ArrayListUnmanaged(SystemFn)).initFill(.{});
 
@@ -164,10 +182,22 @@ pub const World = struct {
             .free_list = .{},
             .storages = .{},
             .systems = systems,
+            .resources = .{},
+            .resource_deinit_fns = .{},
         };
     }
 
     pub fn deinit(self: *World) void {
+        // Clean up resources
+        var res_it = self.resources.iterator();
+        while (res_it.next()) |entry| {
+            if (self.resource_deinit_fns.get(entry.key_ptr.*)) |deinit_fn| {
+                deinit_fn(entry.value_ptr.*, self.allocator);
+            }
+        }
+        self.resources.deinit(self.allocator);
+        self.resource_deinit_fns.deinit(self.allocator);
+
         var it = self.storages.valueIterator();
         while (it.next()) |storage| {
             storage.deinit_fn(storage, self.allocator);
@@ -281,6 +311,59 @@ pub const World = struct {
         var ctx = SystemContext{ .world = self, .delta_time = delta_time };
         for (self.systems.getPtr(schedule).items) |system| {
             system(&ctx);
+        }
+    }
+
+    /// Insert a resource (singleton data accessible by any system)
+    /// If the resource already exists, it will be replaced
+    pub fn insertResource(self: *World, resource: anytype) !void {
+        const T = @TypeOf(resource);
+        const type_id = typeId(T);
+
+        // Allocate and store the resource
+        const ptr = try self.allocator.create(T);
+        ptr.* = resource;
+
+        // Store deinit function
+        const deinit_fn = struct {
+            fn deinit(data: *anyopaque, allocator: std.mem.Allocator) void {
+                const typed_ptr: *T = @ptrCast(@alignCast(data));
+                allocator.destroy(typed_ptr);
+            }
+        }.deinit;
+
+        // Remove old resource if exists
+        if (self.resources.get(type_id)) |old_ptr| {
+            if (self.resource_deinit_fns.get(type_id)) |old_deinit| {
+                old_deinit(old_ptr, self.allocator);
+            }
+        }
+
+        try self.resources.put(self.allocator, type_id, ptr);
+        try self.resource_deinit_fns.put(self.allocator, type_id, deinit_fn);
+    }
+
+    /// Get a resource by type (returns mutable pointer)
+    pub fn getResource(self: *World, comptime T: type) ?*T {
+        const type_id = typeId(T);
+        const ptr = self.resources.get(type_id) orelse return null;
+        return @ptrCast(@alignCast(ptr));
+    }
+
+    /// Check if a resource exists
+    pub fn hasResource(self: *World, comptime T: type) bool {
+        return self.resources.contains(typeId(T));
+    }
+
+    /// Remove a resource
+    pub fn removeResource(self: *World, comptime T: type) void {
+        const type_id = typeId(T);
+        if (self.resources.get(type_id)) |ptr| {
+            if (self.resource_deinit_fns.get(type_id)) |deinit_fn| {
+                deinit_fn(ptr, self.allocator);
+            }
+            _ = self.resources.remove(type_id);
+            _ = self.resource_deinit_fns.remove(type_id);
         }
     }
 };

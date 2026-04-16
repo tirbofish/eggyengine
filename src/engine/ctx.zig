@@ -1,5 +1,5 @@
 const std = @import("std");
-const ecs = @import("eggyecs/ecs.zig");
+const ecs = @import("ecs.zig");
 
 pub const Context = struct {
     world: *ecs.World,
