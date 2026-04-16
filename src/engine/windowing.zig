@@ -12,7 +12,7 @@ pub const WindowingModuleOptions = struct {
     frame_rate: FrameRateMode = .unlimited,
 };
 
-pub fn WindowingModule(comptime options: WindowingModuleOptions) type {
+pub fn WindowingModule(comptime options: WindowingModuleOptions, backend: eggy.mod.rendering.Backend) type {
     const FramerateCapper = sdl.extras.FramerateCapper(f32);
     
     return struct {
@@ -21,13 +21,14 @@ pub fn WindowingModule(comptime options: WindowingModuleOptions) type {
             .mode = switch (options.frame_rate) {
                 .unlimited => .unlimited,
                 .limited => |fps| .{ .limited = fps },
-                .vsync => .unlimited,
             },
         },
         quit: bool = false,
 
         pub const schedules = .{
-            .init = &.{init},
+            .init = &.{
+                init
+            },
             .pre_update = &.{pollEvents},
             .post_render = &.{tickFramerate},
             .deinit = &.{deinit},
@@ -39,6 +40,9 @@ pub fn WindowingModule(comptime options: WindowingModuleOptions) type {
             };
             try sdl.init(init_flags);
             log.debug("SDL initialised", .{});
+
+            try eggy.mod.rendering.ensure_renderer_is_available(backend);
+            log.info("Using backend [{}]", .{backend});
 
             const window = try sdl.video.Window.init(options.title, options.size.x, options.size.y, .{
                 .fullscreen = options.window_flags.fullscreen,
@@ -70,7 +74,7 @@ pub fn WindowingModule(comptime options: WindowingModuleOptions) type {
         }
 
         fn deinit(this: *@This(), _: *eggy.Context) void {
-            // since defer is done in reverse order, might as well keep it like so. 
+            // since defer is done in reverse order, might as well add defer to make it more accurate. 
             defer sdl.quit(options.init_flags);
             defer this.window.deinit();
         }
@@ -102,8 +106,6 @@ pub const FrameRateMode = union(enum) {
     unlimited,
     /// Limit to specific FPS
     limited: f32,
-    /// Use VSync (handled by window flags)
-    vsync,
 };
 
 pub const WindowFlags = struct {

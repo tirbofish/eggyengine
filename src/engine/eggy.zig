@@ -171,6 +171,15 @@ pub fn EggyApp(comptime user_modules: []const type) type {
                             const returns_error = FnInfo.return_type != null and 
                                 @typeInfo(FnInfo.return_type.?) == .error_union;
                             
+                            // zero sized modules cannot have 2 params (specifically it cannot have `@This`) 
+                            if (FnInfo.params.len == 2 and @sizeOf(M) == 0) {
+                                @compileError(
+                                    "Module '" ++ @typeName(M) ++ "' has no runtime fields (size=0) " ++
+                                    "but schedule function '" ++ @typeName(@TypeOf(func)) ++ "' takes *Self. " ++
+                                    "Either add a field to the module, or change the function to only take *Context."
+                                );
+                            }
+                            
                             const result = switch (FnInfo.params.len) {
                                 0 => func(),
                                 1 => func(&ctx),
@@ -206,5 +215,26 @@ pub fn EggyApp(comptime user_modules: []const type) type {
 fn validateModule(comptime M: type) void {
     if (@typeInfo(M) != .@"struct") {
         @compileError(@typeName(M) ++ " must be a struct");
+    }
+    
+    // zero sized modules cannot have 2 params (specifically it cannot have `@This`) 
+    if (@hasDecl(M, "schedules")) {
+        const scheds = M.schedules;
+        const is_zero_sized = @sizeOf(M) == 0;
+        
+        inline for (@typeInfo(@TypeOf(scheds)).@"struct".fields) |field| {
+            const funcs = @field(scheds, field.name);
+            inline for (funcs) |func| {
+                const FnInfo = @typeInfo(@TypeOf(func)).@"fn";
+                if (FnInfo.params.len == 2 and is_zero_sized) {
+                    @compileError(
+                        "Module '" ++ @typeName(M) ++ "' is zero-sized (has no runtime fields) " ++
+                        "but its '" ++ field.name ++ "' schedule has a function that takes *Self.\n" ++
+                        "Fix: Either add a field to the module, or change the function signature from " ++
+                        "'fn(self: *@This(), ctx: *Context)' to 'fn(ctx: *Context)'."
+                    );
+                }
+            }
+        }
     }
 }
