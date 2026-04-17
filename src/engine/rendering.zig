@@ -29,11 +29,11 @@ pub fn RenderingModule(comptime BackendImpl: type) type {
             }
 
             const backend_name = if (@hasDecl(BackendImpl, "name")) BackendImpl.name else @typeName(BackendImpl);
-            std.log.info("Using backend [{s}]", .{backend_name});
+            eggy.logger.infof("Using backend [{s}]", .{backend_name}, @src()) catch {};
 
             const window = ctx.world.getResource(sdl.video.Window) orelse return error.WindowNotFound;
             const impl = try ctx.allocator.create(BackendImpl);
-            impl.* = try BackendImpl.init(ctx.allocator, window.*);
+            impl.* = try BackendImpl.init(ctx.allocator, &window.*);
             self.rendering_interface = Renderer.init(impl, ctx.allocator);
         }
 

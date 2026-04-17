@@ -1,8 +1,9 @@
 const sdl = @import("sdl3");
-const vk = @import("vulkan");
+pub const vk = @import("vulkan");
 const builtin = @import("builtin");
 const std = @import("std");
 const rendering = @import("../rendering.zig");
+const eggy = @import("../eggy.zig");
 
 const Allocator = std.mem.Allocator;
 const SdlBackend = rendering.SdlBackend;
@@ -32,50 +33,122 @@ pub fn EggyVulkanInterface(comptime options: Options) type {
 
         pub fn ensure_available() !void {
             try sdl.vulkan.loadLibrary(null);
-            std.log.debug("Vulkan library is loaded", .{});
+            eggy.logger.debug("Vulkan library is loaded", @src()) catch {};
         }
+
         allocator: Allocator,
-        vkb: vk.BaseWrapper,
-        instance: vk.InstanceProxy,
-        surface: vk.SurfaceKHR,
+
+        window: *sdl.video.Window,
+        // required to be able to drop safely
         sdl_surface: sdl.vulkan.Surface,
 
-        pub fn init(allocator: Allocator, window: sdl.video.Window) !@This() {
+        vkb: vk.BaseWrapper, // vk::raii::Context?
+        instance: vk.InstanceProxy,
+        debug_utils_messenger: vk.DebugUtilsMessengerEXT,
+        surface: vk.SurfaceKHR,
+        physical_device: vk.PhysicalDevice,
+        device: vk.Device,
+        queue: vk.Queue,
+
+        pub fn init(allocator: Allocator, window: *sdl.video.Window) !@This() {
             var self: @This() = undefined;
             self.allocator = allocator;
+            self.window = window;
 
+            // setup vulkan
             const get_proc_addr = try sdl.vulkan.getVkGetInstanceProcAddr();
             self.vkb = vk.BaseWrapper.load(@as(vk.PfnGetInstanceProcAddr, @ptrCast(get_proc_addr)));
 
+            var extensions: std.ArrayList([*:0]const u8) = .empty;
+            defer extensions.deinit(self.allocator);
+
+            var layers: std.ArrayList([*:0]const u8) = .empty;
+            defer layers.deinit(self.allocator);
+
+            try ensureExtensions(&self, &layers, &extensions);
+
+            try createInstance(&self, &layers, &extensions);
+
             if (options.enable_validation_layers) {
-                if (try checkLayerSupport(&self.vkb, allocator, &validation_layer_names) == false) {
+                try setupDebugMessenger(&self);
+            }
+
+            // create surface
+            const surface_result = try createSurface(&self);
+            self.surface = surface_result.vk_surface;
+            self.sdl_surface = surface_result.sdl_surface;
+
+            try pickPhysicalDevice(&self);
+
+            // make these last
+            eggy.logger.debug("Initialised vulkan for eggy", @src()) catch {};
+            return self;
+        }
+
+        pub fn deinit(self: *@This()) void {
+            self.sdl_surface.deinit();
+            if (options.enable_validation_layers) {
+                self.instance.destroyDebugUtilsMessengerEXT(self.debug_utils_messenger, null);
+            }
+            self.instance.destroyInstance(null);
+            self.allocator.destroy(self.instance.wrapper);
+        }
+
+        fn ensureExtensions(
+            self: *@This(),
+            layers: *std.ArrayList([*:0]const u8),
+            extensions: *std.ArrayList([*:0]const u8),
+        ) !void {
+            if (options.enable_validation_layers) {
+                if (try checkLayerSupport(&self.vkb, self.allocator, &validation_layer_names) == false) {
                     return error.MissingValidationLayer;
                 }
             }
 
             const sdl_extensions = try sdl.vulkan.getInstanceExtensions();
 
-            var extensions: std.ArrayList([*:0]const u8) = .empty;
-            defer extensions.deinit(allocator);
-
-            try extensions.appendSlice(allocator, sdl_extensions);
+            try extensions.appendSlice(self.allocator, sdl_extensions);
 
             if (options.enable_validation_layers) {
-                try extensions.append(allocator, vk.extensions.ext_debug_utils.name);
+                try extensions.append(self.allocator, vk.extensions.ext_debug_utils.name);
             }
 
             for (options.extra_extensions) |ext| {
-                try extensions.append(allocator, ext);
+                try extensions.append(self.allocator, ext);
             }
 
-            var layers: std.ArrayList([*:0]const u8) = .empty;
-            defer layers.deinit(allocator);
-
-            try layers.appendSlice(allocator, &validation_layer_names);
+            try layers.appendSlice(self.allocator, &validation_layer_names);
             for (options.extra_layers) |layer| {
-                try layers.append(allocator, layer);
+                try layers.append(self.allocator, layer);
             }
+        }
 
+        fn setupDebugMessenger(self: *@This()) !void {
+            const severityFlags = vk.DebugUtilsMessageSeverityFlagsEXT{
+                .warning_bit_ext = true,
+                .error_bit_ext = true,
+            };
+
+            const messageTypeFlags = vk.DebugUtilsMessageTypeFlagsEXT{
+                .general_bit_ext = true,
+                .performance_bit_ext = true,
+                .validation_bit_ext = true,
+            };
+
+            const createInfo = vk.DebugUtilsMessengerCreateInfoEXT{
+                .message_severity = severityFlags,
+                .message_type = messageTypeFlags,
+                .pfn_user_callback = debugCallback,
+            };
+
+            self.debug_utils_messenger = try self.instance.createDebugUtilsMessengerEXT(&createInfo, null);
+        }
+
+        fn createInstance(
+            self: *@This(),
+            layers: *std.ArrayList([*:0]const u8),
+            extensions: *std.ArrayList([*:0]const u8),
+        ) !void {
             const instance_handle = try self.vkb.createInstance(&.{
                 .p_application_info = &.{
                     .p_application_name = options.app_name,
@@ -90,42 +163,130 @@ pub fn EggyVulkanInterface(comptime options: Options) type {
                 .pp_enabled_extension_names = @ptrCast(extensions.items.ptr),
             }, null);
 
-            const vki = try allocator.create(vk.InstanceWrapper);
-            errdefer allocator.destroy(vki);
+            const vki = try self.allocator.create(vk.InstanceWrapper);
+            errdefer self.allocator.destroy(vki);
             vki.* = vk.InstanceWrapper.load(instance_handle, self.vkb.dispatch.vkGetInstanceProcAddr.?);
             self.instance = vk.InstanceProxy.init(instance_handle, vki);
-            std.log.debug("Initialised vk.Instance", .{});
             errdefer self.instance.destroyInstance(null);
-
-            const surface_result = try createSurface(self.instance, window);
-            std.log.debug("Initialised vk.Surface", .{});
-            self.surface = surface_result.vk_surface;
-            self.sdl_surface = surface_result.sdl_surface;
-
-            return self;
         }
 
-        pub fn deinit(self: *@This()) void {
-            self.sdl_surface.deinit();
-            self.instance.destroyInstance(null);
-            self.allocator.destroy(self.instance.wrapper);
+        fn createSurface(self: *@This()) !SurfaceResult {
+            const sdl_instance: sdl.vulkan.Instance = @ptrFromInt(@intFromEnum(self.instance.handle));
+            const sdl_surface = try sdl.vulkan.Surface.init(self.window.*, sdl_instance, null);
+            return .{
+                .vk_surface = @enumFromInt(@intFromPtr(sdl_surface.surface)),
+                .sdl_surface = sdl_surface,
+            };
+        }
+
+        fn pickPhysicalDevice(self: *@This()) !void {
+            const physical_devices = try self.instance.enumeratePhysicalDevicesAlloc(self.allocator);
+            defer self.allocator.free(physical_devices);
+
+            if (physical_devices.len == 0) {
+                return error.NoVulkanDevices;
+            }
+
+            const PhysicalDeviceScore = struct { device: vk.PhysicalDevice, score: u32 };
+
+            var pq = std.PriorityQueue(PhysicalDeviceScore, void, struct {
+                fn compare(_: void, a: PhysicalDeviceScore, b: PhysicalDeviceScore) std.math.Order {
+                    return std.math.order(b.score, a.score);
+                }
+            }.compare).init(self.allocator, {});
+            defer pq.deinit();
+
+            for (physical_devices) |device| {
+                if (try isDeviceSuitable(self, device)) {
+                    try pq.add(.{ .device = device, .score = try scoreDevice(self, device) });
+                }
+            }
+
+            if (pq.peek()) |scored| {
+                self.physical_device = scored.device;
+                const props = self.instance.getPhysicalDeviceProperties(scored.device);
+                eggy.logger.infof("Selected GPU: {s}", .{std.mem.sliceTo(&props.device_name, 0)}, @src()) catch {};
+                eggy.logger.debugf("GPU selected was ranked {d}/{d} with a score of {d} points", .{ 1, pq.count(), scored.score }, @src()) catch {};
+
+                return;
+            }
+
+            return error.NoSuitableDevice;
+        }
+
+        fn scoreDevice(self: *@This(), device: vk.PhysicalDevice) !u32 {
+            var score: u32 = 0;
+
+            const props = self.instance.getPhysicalDeviceProperties(device);
+
+            // discrete gpu takes priority
+            score += switch (props.device_type) {
+                .discrete_gpu => 1000,
+                .integrated_gpu => 100,
+                else => 10,
+            };
+
+            score += props.limits.max_image_dimension_2d;
+            score += props.limits.max_uniform_buffer_range;
+            score += props.limits.max_push_constants_size;
+            score += props.limits.max_framebuffer_width + props.limits.max_framebuffer_height;
+            score += props.limits.max_viewports;
+            score += props.limits.max_bound_descriptor_sets;
+
+            // i think thats enough to use to score?
+
+            return score;
+        }
+
+        fn isDeviceSuitable(self: *@This(), device: vk.PhysicalDevice) !bool {
+            // check for queue families
+            const queue_families = try self.instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(device, self.allocator);
+            defer self.allocator.free(queue_families);
+
+            var has_graphics_queue = false;
+            for (queue_families, 0..) |family, i| {
+                if (family.queue_flags.graphics_bit) {
+                    has_graphics_queue = true;
+                    // also check for present support
+                    const present_support = self.instance.getPhysicalDeviceSurfaceSupportKHR(device, @intCast(i), self.surface) catch vk.Bool32.false;
+                    if (present_support == vk.Bool32.true) {
+                        return true;
+                    }
+                }
+            }
+
+            return has_graphics_queue;
         }
     };
+}
+
+fn debugCallback(
+    message_severity: vk.DebugUtilsMessageSeverityFlagsEXT,
+    message_type: vk.DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: ?*const vk.DebugUtilsMessengerCallbackDataEXT,
+    p_user_data: ?*anyopaque,
+) callconv(vk.vulkan_call_conv) vk.Bool32 {
+    _ = message_type;
+    _ = p_user_data;
+
+    const severity_str = if (message_severity.error_bit_ext)
+        "ERROR"
+    else if (message_severity.warning_bit_ext)
+        "WARNING"
+    else
+        "INFO";
+
+    if (p_callback_data) |data| {
+        eggy.logger.debugf("[vulkan] [{s}] {s}", .{ severity_str, data.p_message orelse "(no message)" }, @src()) catch {};
+    }
+
+    return .false;
 }
 
 const SurfaceResult = struct {
     vk_surface: vk.SurfaceKHR,
     sdl_surface: sdl.vulkan.Surface,
 };
-
-fn createSurface(instance: vk.InstanceProxy, window: sdl.video.Window) !SurfaceResult {
-    const sdl_instance: sdl.vulkan.Instance = @ptrFromInt(@intFromEnum(instance.handle));
-    const sdl_surface = try sdl.vulkan.Surface.init(window, sdl_instance, null);
-    return .{
-        .vk_surface = @enumFromInt(@intFromPtr(sdl_surface.surface)),
-        .sdl_surface = sdl_surface,
-    };
-}
 
 fn checkLayerSupport(vkb: *const vk.BaseWrapper, alloc: Allocator, required_layers: []const [*:0]const u8) !bool {
     const available_layers = try vkb.enumerateInstanceLayerPropertiesAlloc(alloc);

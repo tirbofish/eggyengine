@@ -1,10 +1,12 @@
-const sdl = @import("sdl3");
+pub const sdl = @import("sdl3");
 const eggy = @import("eggy.zig");
+const input = @import("input.zig");
 const log = @import("std").log;
 
 pub const WindowingModuleOptions = struct {
     init_flags: sdl.InitFlags = .{
         .video = true,
+        .gamepad = true,
     },
     title: [:0]const u8 = "eggyengine app",
     size: eggy.math.Vector2(usize) = .{ .x = 800, .y = 600 },
@@ -12,23 +14,20 @@ pub const WindowingModuleOptions = struct {
     frame_rate: FrameRateMode = .unlimited,
 };
 
-pub fn WindowingModule(comptime options: WindowingModuleOptions, comptime sdl_backend: eggy.mod.rendering.SdlBackend) type {
+pub fn WindowingModule(comptime options: WindowingModuleOptions, comptime sdl_backend: eggy.module.rendering.SdlBackend) type {
     const FramerateCapper = sdl.extras.FramerateCapper(f32);
-    
+
     return struct {
         window: sdl.video.Window = undefined,
-        fps_capper: FramerateCapper = .{ 
+        fps_capper: FramerateCapper = .{
             .mode = switch (options.frame_rate) {
                 .unlimited => .unlimited,
                 .limited => |fps| .{ .limited = fps },
             },
         },
-        quit: bool = false,
 
         pub const schedules = .{
-            .init = &.{
-                init
-            },
+            .init = &.{init},
             .pre_update = &.{pollEvents},
             .post_render = &.{tickFramerate},
             .deinit = &.{deinit},
@@ -39,7 +38,7 @@ pub fn WindowingModule(comptime options: WindowingModuleOptions, comptime sdl_ba
                 .video = true,
             };
             try sdl.init(init_flags);
-            log.debug("SDL initialised", .{});
+            try eggy.logger.debug("SDL initialised", @src());
 
             const window = try sdl.video.Window.init(options.title, options.size.x, options.size.y, .{
                 .fullscreen = options.window_flags.fullscreen,
@@ -69,11 +68,11 @@ pub fn WindowingModule(comptime options: WindowingModuleOptions, comptime sdl_ba
             });
             self.window = window;
             try ctx.world.insertResource(window);
-            log.debug("Window initialised", .{});
+            try eggy.logger.debug("Window initialised", @src());
         }
 
         fn deinit(this: *@This(), _: *eggy.Context) void {
-            // since defer is done in reverse order, might as well add defer to make it more accurate. 
+            // since defer is done in reverse order, might as well add defer to make it more accurate.
             defer sdl.quit(options.init_flags);
             defer this.window.deinit();
         }
@@ -82,12 +81,90 @@ pub fn WindowingModule(comptime options: WindowingModuleOptions, comptime sdl_ba
             _ = try self.window.getSurface();
             try self.window.updateSurface();
 
+            const keyboard = ctx.world.getResource(input.KeyboardInput);
+            const mouse = ctx.world.getResource(input.MouseInput);
+            const gamepad = ctx.world.getResource(input.GamepadInput);
+
             while (sdl.events.poll()) |event| {
                 switch (event) {
                     .quit, .terminating => {
-                        self.quit = true;
                         ctx.quit();
                     },
+
+                    .key_down => |kev| {
+                        if (keyboard) |kb| {
+                            if (kev.scancode) |sca| {
+                                kb.onKeyDown(sca);
+                            }
+                        }
+                    },
+                    .key_up => |kev| {
+                        if (keyboard) |kb| {
+                            if (kev.scancode) |sca| {
+                                kb.onKeyUp(sca);
+                            }
+                        }
+                    },
+
+                    .mouse_motion => |mev| {
+                        if (mouse) |m| {
+                            m.onMotion(mev.x, mev.y, mev.x_rel, mev.y_rel);
+                        }
+                    },
+                    .mouse_button_down => |mev| {
+                        if (mouse) |m| {
+                            if (sdlMouseButtonToEnum(mev.button)) |btn| {
+                                m.onButtonDown(btn);
+                            }
+                        }
+                    },
+                    .mouse_button_up => |mev| {
+                        if (mouse) |m| {
+                            if (sdlMouseButtonToEnum(mev.button)) |btn| {
+                                m.onButtonUp(btn);
+                            }
+                        }
+                    },
+                    .mouse_wheel => |wev| {
+                        if (mouse) |m| {
+                            m.onScroll(wev.x, wev.y);
+                        }
+                    },
+
+                    .gamepad_added => |gev| {
+                        if (gamepad) |gp| {
+                            gp.onConnected(gev.id);
+                        }
+                    },
+                    .gamepad_removed => |gev| {
+                        if (gamepad) |gp| {
+                            gp.onDisconnected(gev.id);
+                        }
+                    },
+                    .gamepad_button_down => |gev| {
+                        if (gamepad) |gp| {
+                            if (gp.getGamepad(gev.id)) |state| {
+                                state.onButtonDown(sdlGamepadButtonToEnum(gev.button));
+                            }
+                        }
+                    },
+                    .gamepad_button_up => |gev| {
+                        if (gamepad) |gp| {
+                            if (gp.getGamepad(gev.id)) |state| {
+                                state.onButtonUp(sdlGamepadButtonToEnum(gev.button));
+                            }
+                        }
+                    },
+                    .gamepad_axis_motion => |gev| {
+                        if (gamepad) |gp| {
+                            if (gp.getGamepad(gev.id)) |state| {
+                                // convert from i16 (-32768 to 32767) to f32 (-1.0 to 1.0)
+                                const value: f32 = @as(f32, @floatFromInt(gev.value)) / 32767.0;
+                                state.onAxisMotion(sdlGamepadAxisToEnum(gev.axis), value);
+                            }
+                        }
+                    },
+
                     else => {},
                 }
             }
@@ -98,7 +175,6 @@ pub fn WindowingModule(comptime options: WindowingModuleOptions, comptime sdl_ba
         }
     };
 }
-
 
 pub const FrameRateMode = union(enum) {
     /// No frame rate limiting
@@ -156,3 +232,58 @@ pub const WindowFlags = struct {
     /// Window should not be focusable.
     not_focusable: bool = false,
 };
+
+// ------------------------------------ sdl helpers ------------------------------------
+
+fn sdlMouseButtonToEnum(button: sdl.mouse.Button) ?input.MouseButton {
+    return switch (button) {
+        .left => input.MouseButton.left,
+        .middle => input.MouseButton.middle,
+        .right => input.MouseButton.right,
+        .x1 => input.MouseButton.x1,
+        .x2 => input.MouseButton.x2,
+        else => null,
+    };
+}
+
+fn sdlGamepadButtonToEnum(button: sdl.gamepad.Button) input.GamepadButton {
+    return switch (button) {
+        .south => .south,
+        .east => .east,
+        .west => .west,
+        .north => .north,
+        .back => .back,
+        .guide => .guide,
+        .start => .start,
+        .left_stick => .left_stick,
+        .right_stick => .right_stick,
+        .left_shoulder => .left_shoulder,
+        .right_shoulder => .right_shoulder,
+        .dpad_up => .dpad_up,
+        .dpad_down => .dpad_down,
+        .dpad_left => .dpad_left,
+        .dpad_right => .dpad_right,
+        .misc1 => .misc1,
+        .right_paddle1 => .right_paddle1,
+        .left_paddle1 => .left_paddle1,
+        .right_paddle2 => .right_paddle2,
+        .left_paddle2 => .left_paddle2,
+        .touchpad => .touchpad,
+        .misc2 => .misc2,
+        .misc3 => .misc3,
+        .misc4 => .misc4,
+        .misc5 => .misc5,
+        .misc6 => .misc6,
+    };
+}
+
+fn sdlGamepadAxisToEnum(axis: sdl.gamepad.Axis) input.GamepadAxis {
+    return switch (axis) {
+        .left_x => .left_x,
+        .left_y => .left_y,
+        .right_x => .right_x,
+        .right_y => .right_y,
+        .left_trigger => .left_trigger,
+        .right_trigger => .right_trigger,
+    };
+}

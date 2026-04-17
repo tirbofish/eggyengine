@@ -1,7 +1,6 @@
 const eggy = @import("eggy");
 const log = @import("std").log;
 
-
 const Position = struct { x: f32, y: f32 };
 const Velocity = struct { dx: f32, dy: f32 };
 const Health = struct { current: i32, max: i32 };

@@ -12,6 +12,10 @@
             .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=master#6d418ef3ddae99098414a96a88bf5e5fdb41785e",
             .hash = "sdl3-0.1.9-NmT1QwiEJwByePqkmArtppCHQn8Y7kiSWcncT_Mop8ie",
         },
+        .logly = .{
+            .url = "https://github.com/muhammad-fiaz/logly.zig/archive/refs/tags/0.1.7.tar.gz",
+            .hash = "logly-0.1.7-kZjLe39xFADjPTzf1uQZJOoBV-25UFvQMI_TnBTwOJBk",
+        },
     },
     .paths = .{""},
     .fingerprint = 0x16f2cc5bea40dcd1,

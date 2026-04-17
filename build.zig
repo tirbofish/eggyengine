@@ -8,6 +8,7 @@ pub fn build(b: *std.Build) void {
     buildExecutable(b, target, optimize, eggy);
 }
 
+// this excludes the actual editor/game attached, only the library itself.
 fn buildEggyLibrary(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -23,6 +24,11 @@ fn buildEggyLibrary(
         .registry = b.path("deps/vk.xml"),
     }).module("vulkan-zig");
 
+    const logly_dep = b.dependency("logly", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const eggy_module = b.createModule(.{
         .root_source_file = b.path("src/engine/eggy.zig"),
         .target = target,
@@ -31,6 +37,7 @@ fn buildEggyLibrary(
 
     eggy_module.addImport("vulkan", vulkan);
     eggy_module.addImport("sdl3", sdl3.module("sdl3"));
+    eggy_module.addImport("logly", logly_dep.module("logly"));
 
     return eggy_module;
 }
