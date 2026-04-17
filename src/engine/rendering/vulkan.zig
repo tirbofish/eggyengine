@@ -20,6 +20,14 @@ pub const Options = struct {
     extra_extensions: []const [*:0]const u8 = &.{},
 };
 
+pub const Swapchain = struct {
+    swapchain: vk.SwapchainKHR,
+    swapchain_image: std.ArrayList(vk.Image),
+    surface_format: vk.SurfaceFormatKHR,
+    swapchain_extent: vk.Extent2D,
+    image_views: std.ArrayList(vk.ImageView),
+};
+
 /// Inherits `BackendImpl`
 pub fn EggyVulkanInterface(comptime options: Options) type {
     const validation_layer_names = if (options.enable_validation_layers)
@@ -49,6 +57,7 @@ pub fn EggyVulkanInterface(comptime options: Options) type {
         pdev: vk.PhysicalDevice,
         props: vk.PhysicalDeviceProperties,
         mem_props: vk.PhysicalDeviceMemoryProperties,
+        swapchain: Swapchain,
 
         device: vk.DeviceProxy,
         queue: Queue,
@@ -82,89 +91,23 @@ pub fn EggyVulkanInterface(comptime options: Options) type {
             self.sdl_surface = surface_result.sdl_surface;
 
             try pickPhysicalDevice(&self);
-
             try createLogicalDevice(&self);
+            try createSwapchain(&self);
 
             // make these last
             eggy.logger.debug("Initialised vulkan for eggy", @src()) catch {};
             return self;
         }
 
-        fn createLogicalDevice(self: *@This()) !void {
-            const qfp = try self.instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(
-                self.pdev,
-                self.allocator,
-            );
-            defer self.allocator.free(qfp);
-
-            // Find a queue family that supports both graphics and present
-            var queue_family_index: ?u32 = null;
-            for (qfp, 0..) |prop, i| {
-                const idx: u32 = @intCast(i);
-                const supports_graphics = prop.queue_flags.graphics_bit;
-                const supports_present = self.instance.getPhysicalDeviceSurfaceSupportKHR(self.pdev, idx, self.surface) catch .false;
-
-                if (supports_graphics and supports_present == .true) {
-                    queue_family_index = idx;
-                    break;
-                }
-            }
-
-            const qfi = queue_family_index orelse return error.NoSuitableQueueFamily;
-
-            eggy.logger.debugf("Using queue family index {d}", .{qfi}, @src()) catch {};
-
-            const device_extensions = [_][*:0]const u8{
-                vk.extensions.khr_swapchain.name,
-            };
-
-            var extended_dynamic_state_features = vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT{
-                .extended_dynamic_state = .true,
-            };
-
-            var vulkan13_features = vk.PhysicalDeviceVulkan13Features{
-                .p_next = @ptrCast(&extended_dynamic_state_features),
-                .dynamic_rendering = .true,
-            };
-
-            var features2 = vk.PhysicalDeviceFeatures2{
-                .p_next = @ptrCast(&vulkan13_features),
-                .features = .{},
-            };
-
-            self.instance.getPhysicalDeviceFeatures2(self.pdev, &features2);
-
-            const queue_priority: f32 = 0.5;
-            const queue_create_info = vk.DeviceQueueCreateInfo{
-                .queue_family_index = qfi,
-                .queue_count = 1,
-                .p_queue_priorities = @ptrCast(&queue_priority),
-            };
-
-            const device_create_info = vk.DeviceCreateInfo{
-                .p_next = @ptrCast(&features2),
-                .queue_create_info_count = 1,
-                .p_queue_create_infos = @ptrCast(&queue_create_info),
-                .enabled_layer_count = 0,
-                .pp_enabled_layer_names = undefined,
-                .enabled_extension_count = device_extensions.len,
-                .pp_enabled_extension_names = &device_extensions,
-            };
-
-            const device_handle = try self.instance.createDevice(self.pdev, &device_create_info, null);
-
-            const get_device_proc_addr = self.instance.wrapper.dispatch.vkGetDeviceProcAddr orelse return error.MissingDeviceProcAddr;
-            const device_wrapper = try self.allocator.create(vk.DeviceWrapper);
-            device_wrapper.* = vk.DeviceWrapper.load(device_handle, get_device_proc_addr);
-            self.device = vk.DeviceProxy.init(device_handle, device_wrapper);
-
-            self.queue = Queue{ .family_index = qfi, .inner = self.device.getDeviceQueue(qfi, 0) };
-
-            eggy.logger.debug("Created logical device and queue", @src()) catch {};
-        }
-
         pub fn deinit(self: *@This()) void {
             self.device.deviceWaitIdle() catch {};
+
+            for (self.swapchain.image_views.items) |i| {
+                self.device.destroyImageView(i, null);
+            }
+            self.swapchain.image_views.deinit(self.allocator);
+            self.swapchain.swapchain_image.deinit(self.allocator);
+            self.device.destroySwapchainKHR(self.swapchain.swapchain, null);
 
             self.device.destroyDevice(null);
             self.allocator.destroy(self.device.wrapper);
@@ -343,6 +286,159 @@ pub fn EggyVulkanInterface(comptime options: Options) type {
             }
 
             return has_graphics_queue;
+        }
+
+        fn createLogicalDevice(self: *@This()) !void {
+            const qfp = try self.instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(
+                self.pdev,
+                self.allocator,
+            );
+            defer self.allocator.free(qfp);
+
+            // Find a queue family that supports both graphics and present
+            var queue_family_index: ?u32 = null;
+            for (qfp, 0..) |prop, i| {
+                const idx: u32 = @intCast(i);
+                const supports_graphics = prop.queue_flags.graphics_bit;
+                const supports_present = self.instance.getPhysicalDeviceSurfaceSupportKHR(self.pdev, idx, self.surface) catch .false;
+
+                if (supports_graphics and supports_present == .true) {
+                    queue_family_index = idx;
+                    break;
+                }
+            }
+
+            const qfi = queue_family_index orelse return error.NoSuitableQueueFamily;
+
+            eggy.logger.debugf("Using queue family index {d}", .{qfi}, @src()) catch {};
+
+            const device_extensions = [_][*:0]const u8{
+                vk.extensions.khr_swapchain.name,
+            };
+
+            var extended_dynamic_state_features = vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT{
+                .extended_dynamic_state = .true,
+            };
+
+            var vulkan13_features = vk.PhysicalDeviceVulkan13Features{
+                .p_next = @ptrCast(&extended_dynamic_state_features),
+                .dynamic_rendering = .true,
+            };
+
+            var features2 = vk.PhysicalDeviceFeatures2{
+                .p_next = @ptrCast(&vulkan13_features),
+                .features = .{},
+            };
+
+            self.instance.getPhysicalDeviceFeatures2(self.pdev, &features2);
+
+            const queue_priority: f32 = 0.5;
+            const queue_create_info = vk.DeviceQueueCreateInfo{
+                .queue_family_index = qfi,
+                .queue_count = 1,
+                .p_queue_priorities = @ptrCast(&queue_priority),
+            };
+
+            const device_create_info = vk.DeviceCreateInfo{
+                .p_next = @ptrCast(&features2),
+                .queue_create_info_count = 1,
+                .p_queue_create_infos = @ptrCast(&queue_create_info),
+                .enabled_layer_count = 0,
+                .pp_enabled_layer_names = undefined,
+                .enabled_extension_count = device_extensions.len,
+                .pp_enabled_extension_names = &device_extensions,
+            };
+
+            const device_handle = try self.instance.createDevice(self.pdev, &device_create_info, null);
+
+            const get_device_proc_addr = self.instance.wrapper.dispatch.vkGetDeviceProcAddr orelse return error.MissingDeviceProcAddr;
+            const device_wrapper = try self.allocator.create(vk.DeviceWrapper);
+            device_wrapper.* = vk.DeviceWrapper.load(device_handle, get_device_proc_addr);
+            self.device = vk.DeviceProxy.init(device_handle, device_wrapper);
+
+            self.queue = Queue{ .family_index = qfi, .inner = self.device.getDeviceQueue(qfi, 0) };
+
+            eggy.logger.debug("Created logical device and queue", @src()) catch {};
+        }
+
+        fn createSwapchain(self: *@This()) !void {
+            const capabilities = try self.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(self.pdev, self.surface);
+            self.swapchain.swapchain_extent = chooseSwapExtent(capabilities, self.window);
+            const min_image_count = chooseSwapMinImageCount(capabilities);
+
+            const available_formats = try self.instance.getPhysicalDeviceSurfaceFormatsAllocKHR(self.pdev, self.surface, self.allocator);
+            defer self.allocator.free(available_formats);
+            self.swapchain.surface_format = chooseSwapSurfaceFormat(available_formats);
+
+            const available_present_modes = try self.instance.getPhysicalDeviceSurfacePresentModesAllocKHR(self.pdev, self.surface, self.allocator);
+            defer self.allocator.free(available_present_modes);
+            const present_mode = chooseSwapPresentMode(available_present_modes);
+
+            const swapchain_create_info = vk.SwapchainCreateInfoKHR{
+                .surface = self.surface,
+                .min_image_count = min_image_count,
+                .image_format = self.swapchain.surface_format.format,
+                .image_color_space = self.swapchain.surface_format.color_space,
+                .image_extent = self.swapchain.swapchain_extent,
+                .image_array_layers = 1,
+                .image_usage = .{ .color_attachment_bit = true },
+                .image_sharing_mode = .exclusive,
+                .pre_transform = capabilities.current_transform,
+                .composite_alpha = .{ .opaque_bit_khr = true },
+                .present_mode = present_mode,
+                .clipped = .true,
+            };
+
+            self.swapchain.swapchain = try self.device.createSwapchainKHR(&swapchain_create_info, null);
+
+            const swapchain_images = try self.device.getSwapchainImagesAllocKHR(self.swapchain.swapchain, self.allocator);
+            defer self.allocator.free(swapchain_images);
+
+            self.swapchain.swapchain_image = .empty;
+            try self.swapchain.swapchain_image.appendSlice(self.allocator, swapchain_images);
+
+            self.swapchain.image_views = .empty;
+
+            eggy.logger.debugf("Created swapchain with {d} images", .{swapchain_images.len}, @src()) catch {};
+        }
+
+        fn chooseSwapExtent(capabilities: vk.SurfaceCapabilitiesKHR, window: *sdl.video.Window) vk.Extent2D {
+            if (capabilities.current_extent.width != std.math.maxInt(u32)) {
+                return capabilities.current_extent;
+            }
+
+            const size = window.getSize() catch return capabilities.current_extent;
+            return .{
+                .width = std.math.clamp(@as(u32, @intCast(size[0])), capabilities.min_image_extent.width, capabilities.max_image_extent.width),
+                .height = std.math.clamp(@as(u32, @intCast(size[1])), capabilities.min_image_extent.height, capabilities.max_image_extent.height),
+            };
+        }
+
+        fn chooseSwapMinImageCount(capabilities: vk.SurfaceCapabilitiesKHR) u32 {
+            var min_img_cnt = @max(3, capabilities.min_image_count);
+            if ((0 < capabilities.max_image_count) and (capabilities.max_image_count < min_img_cnt)) {
+                min_img_cnt = capabilities.max_image_count;
+            }
+            return min_img_cnt;
+        }
+
+        fn chooseSwapSurfaceFormat(available_formats: []const vk.SurfaceFormatKHR) vk.SurfaceFormatKHR {
+            std.debug.assert(available_formats.len > 0);
+            for (available_formats) |format| {
+                if (format.format == .b8g8r8a8_srgb and format.color_space == .srgb_nonlinear_khr) {
+                    return format;
+                }
+            }
+            return available_formats[0];
+        }
+
+        fn chooseSwapPresentMode(available_present_modes: []const vk.PresentModeKHR) vk.PresentModeKHR {
+            for (available_present_modes) |mode| {
+                if (mode == .mailbox_khr) {
+                    return .mailbox_khr;
+                }
+            }
+            return .fifo_khr;
         }
     };
 }
