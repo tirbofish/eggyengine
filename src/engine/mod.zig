@@ -5,7 +5,6 @@ pub const rendering = @import("rendering.zig");
 
 pub const DefaultModuleOptions = struct {
     windowing_options: windowing.WindowingModuleOptions = .{},
-    backend: rendering.Backend = rendering.Backend.Vulkan,
 };
 
 /// This module allows for you to run a simple window and a renderer, as well as input and more. 
@@ -14,12 +13,18 @@ pub const DefaultModuleOptions = struct {
 /// ## Windowing
 /// - SDL3
 /// ## Graphics
-/// - vulkan
-pub fn DefaultModule(comptime options: DefaultModuleOptions) type {
+/// - vulkan - Options can be provided through [`eggy.mod.rendering.vulkan.EggyVulkanInterface`]
+/// 
+/// # Example
+/// ```zig
+/// eggy.mod.DefaultModule(.{}, eggy.mod.rendering.vulkan.EggyVulkanInterface(.{}))
+/// ```
+pub fn DefaultModule(comptime options: DefaultModuleOptions, comptime BackendImpl: type) type {
     return struct {
         pub const sub_modules = &.{
-            windowing.WindowingModule(options.windowing_options, options.backend),
-            rendering.RenderingModule(options.backend)
+            // windowing must be done before rendering to ensure sdl.video.Window is in the resource
+            windowing.WindowingModule(options.windowing_options, BackendImpl.sdl_backend),
+            rendering.RenderingModule(BackendImpl),
         };
 
         pub const schedules = .{};

@@ -12,7 +12,7 @@ pub const WindowingModuleOptions = struct {
     frame_rate: FrameRateMode = .unlimited,
 };
 
-pub fn WindowingModule(comptime options: WindowingModuleOptions, backend: eggy.mod.rendering.Backend) type {
+pub fn WindowingModule(comptime options: WindowingModuleOptions, comptime sdl_backend: eggy.mod.rendering.SdlBackend) type {
     const FramerateCapper = sdl.extras.FramerateCapper(f32);
     
     return struct {
@@ -34,15 +34,12 @@ pub fn WindowingModule(comptime options: WindowingModuleOptions, backend: eggy.m
             .deinit = &.{deinit},
         };
 
-        fn init(self: *@This(), _: *eggy.Context) !void {
+        fn init(self: *@This(), ctx: *eggy.Context) !void {
             const init_flags = sdl.InitFlags{
                 .video = true,
             };
             try sdl.init(init_flags);
             log.debug("SDL initialised", .{});
-
-            try eggy.mod.rendering.ensure_renderer_is_available(backend);
-            log.info("Using backend [{}]", .{backend});
 
             const window = try sdl.video.Window.init(options.title, options.size.x, options.size.y, .{
                 .fullscreen = options.window_flags.fullscreen,
@@ -67,9 +64,11 @@ pub fn WindowingModule(comptime options: WindowingModuleOptions, backend: eggy.m
                 .keyboard_grabbed = options.window_flags.keyboard_grabbed,
                 .transparent = options.window_flags.transparent,
                 .not_focusable = options.window_flags.not_focusable,
-                .vulkan = true,
+                .vulkan = sdl_backend == .vulkan,
+                .open_gl = sdl_backend == .opengl,
             });
             self.window = window;
+            try ctx.world.insertResource(window);
             log.debug("Window initialised", .{});
         }
 

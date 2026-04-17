@@ -59,6 +59,13 @@ fn countModules(comptime input: []const type) usize {
     return count;
 }
 
+const EggyAppOptions = struct {
+    /// Panic on any error for a function that returns `!void`. 
+    /// 
+    /// By default, if it is built in debug, it is set as true. 
+    panic_on_err: bool = @import("builtin").mode == .Debug,
+};
+
 pub fn EggyApp(comptime user_modules: []const type) type {
     const modules = flattenModules(user_modules);
 
@@ -77,19 +84,33 @@ pub fn EggyApp(comptime user_modules: []const type) type {
         running: bool,
         delta_time: f32,
         fixed_accumulator: f32 = 0,
+
+        options: EggyAppOptions,
         
-        pub fn init(allocator: std.mem.Allocator) Self {
+        pub fn init(allocator: std.mem.Allocator, opt: EggyAppOptions) Self {
             var self = Self{
                 .allocator = allocator,
                 .world = ecs.World.init(allocator),
                 .modules = undefined,
                 .running = true,
                 .delta_time = 0,
+                .options = opt,
             };
             
             // default init all modules
             inline for (&self.modules, 0..) |*m, i| {
-                m.* = modules[i]{};
+                const M = modules[i];
+                const fields = @typeInfo(M).@"struct".fields;
+                inline for (fields) |field| {
+                    if (field.default_value_ptr == null) {
+                        @compileError(
+                            "Module '" ++ @typeName(M) ++ "' cannot be default-initialised: " ++
+                            "field '" ++ field.name ++ "' has no default value. " ++
+                            "Either provide a default value or implement a custom init."
+                        );
+                    }
+                }
+                m.* = M{};
             }
             
             self.runSchedule(.pre_init);
@@ -157,8 +178,19 @@ pub fn EggyApp(comptime user_modules: []const type) type {
                 .delta_time = dt,
                 .running = &self.running,
             };
+
+            const is_deinit = schedule == .pre_deinit or schedule == .deinit or schedule == .post_deinit;
             
-            inline for (&self.modules, 0..) |*m, i| {
+            const indices = comptime blk: {
+                var idx: [modules.len]usize = undefined;
+                for (0..modules.len) |i| {
+                    idx[i] = if (is_deinit) modules.len - 1 - i else i;
+                }
+                break :blk idx;
+            };
+
+            inline for (indices) |i| {
+                const m = &self.modules[i];
                 const M = modules[i];
                 if (@hasDecl(M, "schedules")) {
                     const scheds = M.schedules;
@@ -190,6 +222,13 @@ pub fn EggyApp(comptime user_modules: []const type) type {
                             // todo: potentially just do a log or make it so debug crashes (like that of validation layers)...
                             if (returns_error) {
                                 _ = result catch |err| {
+                                    if (self.options.panic_on_err) {
+                                        std.debug.panic("[{s}] System '{s}' failed: {}", .{
+                                            schedule_name,
+                                            @typeName(M),
+                                            err,
+                                        });
+                                    }
                                     std.log.err("[{s}] System '{s}' failed: {}", .{
                                         schedule_name,
                                         @typeName(M),
