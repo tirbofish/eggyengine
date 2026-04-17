@@ -1,11 +1,15 @@
 const std = @import("std");
+const build_shaders = @import("build-shaders.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Add shader compilation step
+    const shader_step = build_shaders.addShaderBuildStep(b);
+
     const eggy = buildEggyLibrary(b, target, optimize);
-    buildExecutable(b, target, optimize, eggy);
+    buildExecutable(b, target, optimize, eggy, shader_step);
 }
 
 // this excludes the actual editor/game attached, only the library itself.
@@ -47,6 +51,7 @@ fn buildExecutable(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     eggy: *std.Build.Module,
+    shader_step: *std.Build.Step,
 ) void {
     const root_module = b.createModule(.{
         .root_source_file = b.path("src/game/main.zig"),
@@ -60,6 +65,9 @@ fn buildExecutable(
         .name = "eggyengine-demo",
         .root_module = root_module,
     });
+
+    // Shaders should be built before the executable
+    exe.step.dependOn(shader_step);
 
     b.installArtifact(exe);
 

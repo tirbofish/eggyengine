@@ -20,6 +20,16 @@ pub const Options = struct {
     extra_extensions: []const [*:0]const u8 = &.{},
 };
 
+const SurfaceResult = struct {
+    vk_surface: vk.SurfaceKHR,
+    sdl_surface: sdl.vulkan.Surface,
+};
+
+const Queue = struct {
+    family_index: u32,
+    inner: vk.Queue,
+};
+
 pub const Swapchain = struct {
     swapchain: vk.SwapchainKHR,
     swapchain_image: std.ArrayList(vk.Image),
@@ -93,6 +103,8 @@ pub fn EggyVulkanInterface(comptime options: Options) type {
             try pickPhysicalDevice(&self);
             try createLogicalDevice(&self);
             try createSwapchain(&self);
+
+            try createGraphicsPipeline(&self);
 
             // make these last
             eggy.logger.debug("Initialised vulkan for eggy", @src()) catch {};
@@ -457,6 +469,10 @@ pub fn EggyVulkanInterface(comptime options: Options) type {
             }
             return .fifo_khr;
         }
+
+        fn createGraphicsPipeline(_: *@This()) !void {
+
+        }
     };
 }
 
@@ -484,11 +500,6 @@ fn debugCallback(
     return .false;
 }
 
-const SurfaceResult = struct {
-    vk_surface: vk.SurfaceKHR,
-    sdl_surface: sdl.vulkan.Surface,
-};
-
 fn checkLayerSupport(vkb: *const vk.BaseWrapper, alloc: Allocator, required_layers: []const [*:0]const u8) !bool {
     const available_layers = try vkb.enumerateInstanceLayerPropertiesAlloc(alloc);
     defer alloc.free(available_layers);
@@ -503,8 +514,3 @@ fn checkLayerSupport(vkb: *const vk.BaseWrapper, alloc: Allocator, required_laye
     }
     return true;
 }
-
-const Queue = struct {
-    family_index: u32,
-    inner: vk.Queue,
-};
