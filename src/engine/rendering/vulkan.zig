@@ -46,9 +46,12 @@ pub fn EggyVulkanInterface(comptime options: Options) type {
         instance: vk.InstanceProxy,
         debug_utils_messenger: vk.DebugUtilsMessengerEXT,
         surface: vk.SurfaceKHR,
-        physical_device: vk.PhysicalDevice,
-        device: vk.Device,
-        queue: vk.Queue,
+        pdev: vk.PhysicalDevice,
+        props: vk.PhysicalDeviceProperties,
+        mem_props: vk.PhysicalDeviceMemoryProperties,
+
+        device: vk.DeviceProxy,
+        queue: Queue,
 
         pub fn init(allocator: Allocator, window: *sdl.video.Window) !@This() {
             var self: @This() = undefined;
@@ -80,13 +83,94 @@ pub fn EggyVulkanInterface(comptime options: Options) type {
 
             try pickPhysicalDevice(&self);
 
+            try createLogicalDevice(&self);
+
             // make these last
             eggy.logger.debug("Initialised vulkan for eggy", @src()) catch {};
             return self;
         }
 
+        fn createLogicalDevice(self: *@This()) !void {
+            const qfp = try self.instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(
+                self.pdev,
+                self.allocator,
+            );
+            defer self.allocator.free(qfp);
+
+            // Find a queue family that supports both graphics and present
+            var queue_family_index: ?u32 = null;
+            for (qfp, 0..) |prop, i| {
+                const idx: u32 = @intCast(i);
+                const supports_graphics = prop.queue_flags.graphics_bit;
+                const supports_present = self.instance.getPhysicalDeviceSurfaceSupportKHR(self.pdev, idx, self.surface) catch .false;
+
+                if (supports_graphics and supports_present == .true) {
+                    queue_family_index = idx;
+                    break;
+                }
+            }
+
+            const qfi = queue_family_index orelse return error.NoSuitableQueueFamily;
+
+            eggy.logger.debugf("Using queue family index {d}", .{qfi}, @src()) catch {};
+
+            const device_extensions = [_][*:0]const u8{
+                vk.extensions.khr_swapchain.name,
+            };
+
+            var extended_dynamic_state_features = vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT{
+                .extended_dynamic_state = .true,
+            };
+
+            var vulkan13_features = vk.PhysicalDeviceVulkan13Features{
+                .p_next = @ptrCast(&extended_dynamic_state_features),
+                .dynamic_rendering = .true,
+            };
+
+            var features2 = vk.PhysicalDeviceFeatures2{
+                .p_next = @ptrCast(&vulkan13_features),
+                .features = .{},
+            };
+
+            self.instance.getPhysicalDeviceFeatures2(self.pdev, &features2);
+
+            const queue_priority: f32 = 0.5;
+            const queue_create_info = vk.DeviceQueueCreateInfo{
+                .queue_family_index = qfi,
+                .queue_count = 1,
+                .p_queue_priorities = @ptrCast(&queue_priority),
+            };
+
+            const device_create_info = vk.DeviceCreateInfo{
+                .p_next = @ptrCast(&features2),
+                .queue_create_info_count = 1,
+                .p_queue_create_infos = @ptrCast(&queue_create_info),
+                .enabled_layer_count = 0,
+                .pp_enabled_layer_names = undefined,
+                .enabled_extension_count = device_extensions.len,
+                .pp_enabled_extension_names = &device_extensions,
+            };
+
+            const device_handle = try self.instance.createDevice(self.pdev, &device_create_info, null);
+
+            const get_device_proc_addr = self.instance.wrapper.dispatch.vkGetDeviceProcAddr orelse return error.MissingDeviceProcAddr;
+            const device_wrapper = try self.allocator.create(vk.DeviceWrapper);
+            device_wrapper.* = vk.DeviceWrapper.load(device_handle, get_device_proc_addr);
+            self.device = vk.DeviceProxy.init(device_handle, device_wrapper);
+
+            self.queue = Queue{ .family_index = qfi, .inner = self.device.getDeviceQueue(qfi, 0) };
+
+            eggy.logger.debug("Created logical device and queue", @src()) catch {};
+        }
+
         pub fn deinit(self: *@This()) void {
+            self.device.deviceWaitIdle() catch {};
+
+            self.device.destroyDevice(null);
+            self.allocator.destroy(self.device.wrapper);
+
             self.sdl_surface.deinit();
+
             if (options.enable_validation_layers) {
                 self.instance.destroyDebugUtilsMessengerEXT(self.debug_utils_messenger, null);
             }
@@ -180,10 +264,10 @@ pub fn EggyVulkanInterface(comptime options: Options) type {
         }
 
         fn pickPhysicalDevice(self: *@This()) !void {
-            const physical_devices = try self.instance.enumeratePhysicalDevicesAlloc(self.allocator);
-            defer self.allocator.free(physical_devices);
+            const pdevs = try self.instance.enumeratePhysicalDevicesAlloc(self.allocator);
+            defer self.allocator.free(pdevs);
 
-            if (physical_devices.len == 0) {
+            if (pdevs.len == 0) {
                 return error.NoVulkanDevices;
             }
 
@@ -196,14 +280,17 @@ pub fn EggyVulkanInterface(comptime options: Options) type {
             }.compare).init(self.allocator, {});
             defer pq.deinit();
 
-            for (physical_devices) |device| {
+            for (pdevs) |device| {
                 if (try isDeviceSuitable(self, device)) {
                     try pq.add(.{ .device = device, .score = try scoreDevice(self, device) });
                 }
             }
 
             if (pq.peek()) |scored| {
-                self.physical_device = scored.device;
+                self.pdev = scored.device;
+                self.props = self.instance.getPhysicalDeviceProperties(scored.device);
+                self.mem_props = self.instance.getPhysicalDeviceMemoryProperties(scored.device);
+
                 const props = self.instance.getPhysicalDeviceProperties(scored.device);
                 eggy.logger.infof("Selected GPU: {s}", .{std.mem.sliceTo(&props.device_name, 0)}, @src()) catch {};
                 eggy.logger.debugf("GPU selected was ranked {d}/{d} with a score of {d} points", .{ 1, pq.count(), scored.score }, @src()) catch {};
@@ -277,7 +364,8 @@ fn debugCallback(
         "INFO";
 
     if (p_callback_data) |data| {
-        eggy.logger.debugf("[vulkan] [{s}] {s}", .{ severity_str, data.p_message orelse "(no message)" }, @src()) catch {};
+        // avoid allocator issues during cleanup, dont use `eggy.logger`
+        std.debug.print("[vulkan] [{s}] {s}\n", .{ severity_str, data.p_message orelse "(no message)" });
     }
 
     return .false;
@@ -302,3 +390,8 @@ fn checkLayerSupport(vkb: *const vk.BaseWrapper, alloc: Allocator, required_laye
     }
     return true;
 }
+
+const Queue = struct {
+    family_index: u32,
+    inner: vk.Queue,
+};
