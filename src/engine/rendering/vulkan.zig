@@ -398,6 +398,23 @@ pub fn EggyVulkanInterface(comptime options: Options) type {
             try self.swapchain.swapchain_image.appendSlice(self.allocator, swapchain_images);
 
             self.swapchain.image_views = .empty;
+            for (swapchain_images) |image| {
+                const image_view_create_info = vk.ImageViewCreateInfo{
+                    .image = image,
+                    .view_type = .@"2d",
+                    .format = self.swapchain.surface_format.format,
+                    .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
+                    .subresource_range = .{
+                        .aspect_mask = .{ .color_bit = true },
+                        .base_mip_level = 0,
+                        .level_count = 1,
+                        .base_array_layer = 0,
+                        .layer_count = 1,
+                    },
+                };
+                const image_view = try self.device.createImageView(&image_view_create_info, null);
+                try self.swapchain.image_views.append(self.allocator, image_view);
+            }
 
             eggy.logger.debugf("Created swapchain with {d} images", .{swapchain_images.len}, @src()) catch {};
         }
