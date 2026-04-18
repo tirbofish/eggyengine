@@ -1,4 +1,4 @@
-//! build slang shaders. 
+//! build slang shaders.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -8,6 +8,7 @@ const ShaderEntry = struct {
     entries: []const []const u8,
 };
 
+// todo: all of this...just not right. perhaps a manifest, or sweep through dirs?
 const shaders = [_]ShaderEntry{
     .{ .name = "shader.slang", .entries = &.{ "vertMain", "fragMain" } },
 };
@@ -21,7 +22,7 @@ pub fn addShaderBuildStep(b: *std.Build) *std.Build.Step {
     };
 
     const shaders_dir = b.path("src/engine/rendering/shaders");
-    const output_dir = "zig-out/shaders";
+    const output_dir = "zig-out/bin/shaders";
 
     const mkdir_cmd = b.addSystemCommand(&.{ "mkdir", "-p", output_dir });
 
@@ -31,10 +32,9 @@ pub fn addShaderBuildStep(b: *std.Build) *std.Build.Step {
 
         compile_cmd.addFileArg(shaders_dir.path(b, shader.name));
         compile_cmd.addArgs(&.{
-            "-target",            "spirv",
-            "-profile",           "spirv_1_4",
-            "-emit-spirv-directly",
-            "-fvk-use-entrypoint-name",
+            "-target",              "spirv",
+            "-profile",             "spirv_1_4",
+            "-emit-spirv-directly", "-fvk-use-entrypoint-name",
         });
 
         for (shader.entries) |entry| {
