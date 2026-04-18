@@ -3,7 +3,7 @@ const eggy = @import("eggy");
 
 pub fn main() !void {
     var app = try eggy.EggyApp(&.{
-        eggy.module.DefaultModule(.{}, eggy.module.rendering.vulkan.EggyVulkanInterface(.{})),
+        eggy.module.DefaultModule(.{}, eggy.module.rendering.vulkan.EggyVulkanInterface),
         struct {
             pub const schedules = .{ .update = &.{escape_to_quit} };
         },

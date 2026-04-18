@@ -8,6 +8,7 @@ pub const ecs = @import("ecs.zig");
 pub const Context = @import("ctx.zig").Context;
 pub const module = @import("mod.zig");
 pub const math = @import("math.zig");
+pub const mem = @import("mem.zig");
 const logly = @import("logly");
 
 pub var logger: *logly.Logger = undefined;

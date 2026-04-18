@@ -11,7 +11,8 @@ pub const SdlBackend = enum {
 
 pub fn RenderingModule(comptime BackendImpl: type) type {
     return struct {
-        rendering_interface: ?Renderer = null,
+        backend: ?*BackendImpl = null,
+        allocator: ?std.mem.Allocator = null,
 
         pub const sdl_backend: SdlBackend = if (@hasDecl(BackendImpl, "sdl_backend"))
             BackendImpl.sdl_backend
@@ -33,14 +34,28 @@ pub fn RenderingModule(comptime BackendImpl: type) type {
 
             const window = ctx.world.getResource(sdl.video.Window) orelse return error.WindowNotFound;
             const impl = try ctx.allocator.create(BackendImpl);
-            impl.* = try BackendImpl.init(ctx.allocator, &window.*);
-            self.rendering_interface = Renderer.init(impl, ctx.allocator);
+            // Use initDefault if available (e.g., EggyVulkanInterface), otherwise regular init
+            impl.* = if (@hasDecl(BackendImpl, "initDefault"))
+                try BackendImpl.initDefault(ctx.allocator, &window.*)
+            else
+                try BackendImpl.init(ctx.allocator, &window.*);
+            self.backend = impl;
+            self.allocator = ctx.allocator;
+
+            try ctx.world.insertResource(self.*);
+            try ctx.world.insertResource(impl.*);
         }
 
         fn deinit(self: *@This(), _: *eggy.Context) void {
-            if (self.rendering_interface) |ri| {
-                ri.deinit();
+            if (self.backend) |b| {
+                b.deinit();
+                self.allocator.?.destroy(b);
             }
+        }
+
+        /// Get a pointer to the underlying backend.
+        pub fn getBackend(self: *@This()) ?*BackendImpl {
+            return self.backend;
         }
     };
 }
