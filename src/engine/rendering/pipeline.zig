@@ -178,6 +178,80 @@ pub const BlendConfig = struct {
     };
 };
 
+pub const VertexInputRate = enum {
+    vertex,
+    instance,
+
+    fn toVk(self: VertexInputRate) vk.VertexInputRate {
+        return switch (self) {
+            .vertex => .vertex,
+            .instance => .instance,
+        };
+    }
+};
+
+pub const VertexFormat = enum {
+    float1,
+    float2,
+    float3,
+    float4,
+    int1,
+    int2,
+    int3,
+    int4,
+    uint1,
+    uint2,
+    uint3,
+    uint4,
+
+    fn toVk(self: VertexFormat) vk.Format {
+        return switch (self) {
+            .float1 => .r32_sfloat,
+            .float2 => .r32g32_sfloat,
+            .float3 => .r32g32b32_sfloat,
+            .float4 => .r32g32b32a32_sfloat,
+            .int1 => .r32_sint,
+            .int2 => .r32g32_sint,
+            .int3 => .r32g32b32_sint,
+            .int4 => .r32g32b32a32_sint,
+            .uint1 => .r32_uint,
+            .uint2 => .r32g32_uint,
+            .uint3 => .r32g32b32_uint,
+            .uint4 => .r32g32b32a32_uint,
+        };
+    }
+};
+
+pub const VertexBinding = struct {
+    binding: u32 = 0,
+    stride: u32,
+    input_rate: VertexInputRate = .vertex,
+
+    pub fn toVk(self: VertexBinding) vk.VertexInputBindingDescription {
+        return .{
+            .binding = self.binding,
+            .stride = self.stride,
+            .input_rate = self.input_rate.toVk(),
+        };
+    }
+};
+
+pub const VertexAttribute = struct {
+    location: u32,
+    binding: u32 = 0,
+    format: VertexFormat,
+    offset: u32,
+
+    pub fn toVk(self: VertexAttribute) vk.VertexInputAttributeDescription {
+        return .{
+            .location = self.location,
+            .binding = self.binding,
+            .format = self.format.toVk(),
+            .offset = self.offset,
+        };
+    }
+};
+
 pub const Pipeline = struct {
     vulkan: *rendering.EggyVulkanInterface,
     handle: vk.Pipeline,
@@ -190,19 +264,24 @@ pub const Pipeline = struct {
     }
 
     /// Start building a new graphics pipeline.
-    pub fn builder(vulkan: *rendering.EggyVulkanInterface) PipelineBuilder {
-        return PipelineBuilder.init(vulkan);
+    pub fn builder(vulkan: *rendering.EggyVulkanInterface, allocator: std.mem.Allocator) PipelineBuilder {
+        return PipelineBuilder.init(vulkan, allocator);
     }
 };
 
 pub const PipelineBuilder = struct {
     vulkan: *rendering.EggyVulkanInterface,
+    allocator: std.mem.Allocator,
 
     // Shader stages
     vert_module: ?vk.ShaderModule = null,
     vert_entry: [*:0]const u8 = "main",
     frag_module: ?vk.ShaderModule = null,
     frag_entry: [*:0]const u8 = "main",
+
+    // Vertex input
+    binding_descriptions: std.ArrayList(vk.VertexInputBindingDescription),
+    attribute_descriptions: std.ArrayList(vk.VertexInputAttributeDescription),
 
     // Input assembly
     topology_value: Topology = .triangle_list,
@@ -233,8 +312,18 @@ pub const PipelineBuilder = struct {
     // Color format (defaults to swapchain format)
     color_format_override: ?vk.Format = null,
 
-    pub fn init(vulkan: *rendering.EggyVulkanInterface) PipelineBuilder {
-        return .{ .vulkan = vulkan };
+    pub fn init(vulkan: *rendering.EggyVulkanInterface, allocator: std.mem.Allocator) PipelineBuilder {
+        return .{
+            .vulkan = vulkan,
+            .allocator = allocator,
+            .binding_descriptions = std.ArrayList(vk.VertexInputBindingDescription).empty,
+            .attribute_descriptions = std.ArrayList(vk.VertexInputAttributeDescription).empty,
+        };
+    }
+
+    pub fn deinit(self: *PipelineBuilder) void {
+        self.binding_descriptions.deinit(self.allocator);
+        self.attribute_descriptions.deinit(self.allocator);
     }
 
     /// Set the vertex shader module and entry point.
@@ -248,6 +337,25 @@ pub const PipelineBuilder = struct {
     pub fn fragmentShader(self: *PipelineBuilder, module: vk.ShaderModule, entry: [*:0]const u8) *PipelineBuilder {
         self.frag_module = module;
         self.frag_entry = entry;
+        return self;
+    }
+
+    /// Add a vertex binding (describes the stride and input rate for a vertex buffer).
+    pub fn addVertexBinding(self: *PipelineBuilder, binding: VertexBinding) *PipelineBuilder {
+        self.binding_descriptions.append(self.allocator, binding.toVk()) catch {};
+        return self;
+    }
+
+    /// Add a vertex attribute (describes a single field in the vertex struct).
+    pub fn addVertexAttribute(self: *PipelineBuilder, attr: VertexAttribute) *PipelineBuilder {
+        return self.addVertexAttributes(&.{attr});
+    }
+
+    /// Add multiple vertex attributes at once.
+    pub fn addVertexAttributes(self: *PipelineBuilder, attrs: []const VertexAttribute) *PipelineBuilder {
+        for (attrs) |attr| {
+            self.attribute_descriptions.append(self.allocator, attr.toVk()) catch {};
+        }
         return self;
     }
 
@@ -325,10 +433,10 @@ pub const PipelineBuilder = struct {
         };
 
         const vertex_input = vk.PipelineVertexInputStateCreateInfo{
-            .vertex_binding_description_count = 0,
-            .p_vertex_binding_descriptions = null,
-            .vertex_attribute_description_count = 0,
-            .p_vertex_attribute_descriptions = null,
+            .vertex_binding_description_count = @intCast(self.binding_descriptions.items.len),
+            .p_vertex_binding_descriptions = if (self.binding_descriptions.items.len > 0) self.binding_descriptions.items.ptr else null,
+            .vertex_attribute_description_count = @intCast(self.attribute_descriptions.items.len),
+            .p_vertex_attribute_descriptions = if (self.attribute_descriptions.items.len > 0) self.attribute_descriptions.items.ptr else null,
         };
 
         const input_assembly = vk.PipelineInputAssemblyStateCreateInfo{

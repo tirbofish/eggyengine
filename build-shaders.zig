@@ -21,7 +21,7 @@ pub fn addShaderBuildStep(b: *std.Build) *std.Build.Step {
         return shader_step;
     };
 
-    const shaders_dir = b.path("src/engine/rendering/shaders");
+    const shaders_dir = b.path("src/engine/shaders");
     const output_dir = "zig-out/bin/shaders";
 
     const mkdir_cmd = b.addSystemCommand(&.{ "mkdir", "-p", output_dir });

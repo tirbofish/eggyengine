@@ -1,3 +1,5 @@
+const math = @import("../math.zig");
+
 pub const Colour = struct {
     r: f32 = 0.0,
     g: f32 = 0.0,
@@ -87,6 +89,15 @@ pub const Colour = struct {
 
     pub fn from_u8(r: u8, g: u8, b: u8) Colour {
         return from_u8_alpha(r, g, b, 255);
+    }
+
+    pub fn to_vec4(self: @This()) math.Vec4 {
+        return math.Vec4 {
+            .x = self.r,
+            .y = self.g,
+            .z = self.b,
+            .w = self.a,
+        };
     }
 
     pub const black = Colour{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };

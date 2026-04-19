@@ -1,5 +1,6 @@
 const std = @import("std");
 const eggy = @import("eggy");
+const vk = eggy.module.rendering.vulkan.vk;
 
 const pipeline = eggy.module.rendering.vulkan.pipeline;
 const cmd = eggy.module.rendering.vulkan.cmd;
@@ -21,6 +22,36 @@ fn escape_to_quit(ctx: *eggy.Context) !void {
     }
 }
 
+pub const Vertex = struct {
+    position: eggy.math.Vec2,
+    colour: eggy.math.Vec3,
+
+    pub fn getBindingDescription() pipeline.VertexBinding {
+        return .{
+            .binding = 0,
+            .stride = @sizeOf(Vertex),
+            .input_rate = .vertex,
+        };
+    }
+
+    pub fn getAttributeDescriptions() [2]pipeline.VertexAttribute {
+        return .{
+            .{
+                .location = 0,
+                .binding = 0,
+                .format = .float2,
+                .offset = @offsetOf(Vertex, "position"),
+            },
+            .{
+                .location = 1,
+                .binding = 0,
+                .format = .float3,
+                .offset = @offsetOf(Vertex, "colour"),
+            },
+        };
+    }
+};
+
 pub const VKModule = struct {
     pipeline: pipeline.Pipeline = undefined,
 
@@ -33,13 +64,21 @@ pub const VKModule = struct {
     pub fn init(self: *@This(), ctx: *eggy.Context) !void {
         const vulkan = ctx.world.getResource(eggy.module.rendering.vulkan.EggyVulkanInterface) orelse return;
 
+        const vertices = [3]Vertex{
+            .{ .position = .{ .x = 0.0, .y = -0.5 }, .colour = .{ .x = 1.0, .y = 0.0, .z = 0.0 } },
+            .{ .position = .{ .x = 0.5, .y = 0.5 }, .colour = .{ .x = 0.0, .y = 1.0, .z = 0.0 } },
+            .{ .position = .{ .x = -0.5, .y = 0.5 }, .colour = .{ .x = 0.0, .y = 0.0, .z = 1.0 } },
+        };
+        _ = vertices;
+
         const shader_file = try std.fs.cwd().openFile("zig-out/bin/shaders/shader.spv", .{});
         defer shader_file.close();
 
         var shader = try pipeline.Shader.init_from_file(vulkan, shader_file, ctx.allocator);
         defer shader.deinit();
 
-        var builder = pipeline.Pipeline.builder(vulkan);
+        var builder = pipeline.Pipeline.builder(vulkan, ctx.allocator);
+        defer builder.deinit();
         self.pipeline = try builder
             .vertexShader(shader.module, "vertMain")
             .fragmentShader(shader.module, "fragMain")
@@ -47,6 +86,8 @@ pub const VKModule = struct {
             .cullMode(.back)
             .frontFace(.clockwise)
             .polygonMode(.fill)
+            .addVertexBinding(Vertex.getBindingDescription())
+            .addVertexAttributes(&Vertex.getAttributeDescriptions())
             .build();
     }
 
