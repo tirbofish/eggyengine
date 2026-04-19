@@ -2,6 +2,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 const pipeline = eggy.module.rendering.vulkan.pipeline;
+const cmd = eggy.module.rendering.vulkan.cmd;
 
 pub fn main() !void {
     var app = try eggy.EggyApp(&.{ eggy.module.DefaultModule(.{}, eggy.module.rendering.vulkan.EggyVulkanInterface), struct {
@@ -25,6 +26,7 @@ pub const VKModule = struct {
 
     pub const schedules = .{
         .init = .{init},
+        .render = .{render},
         .deinit = .{deinit},
     };
 
@@ -46,6 +48,34 @@ pub const VKModule = struct {
             .frontFace(.clockwise)
             .polygonMode(.fill)
             .build();
+    }
+
+    pub fn render(self: *@This(), ctx: *eggy.Context) !void {
+        const vulkan = ctx.world.getResource(eggy.module.rendering.vulkan.EggyVulkanInterface) orelse return;
+
+        var frame = cmd.Frame.acquire(vulkan) catch |err| switch (err) {
+            error.SurfaceLost => {
+                std.debug.print("Frame.acquire failed: SurfaceLost\n", .{});
+                ctx.quit();
+                return;
+            },
+            error.SwapchainOutOfDate => {
+                std.debug.print("Frame.acquire failed: SwapchainOutOfDate\n", .{});
+                // TODO: recreate swapchain
+                return;
+            },
+            else => {
+                std.debug.print("Frame.acquire failed: {any}\n", .{err});
+                return err;
+            },
+        };
+
+        frame.beginRendering(.cornflower_blue);
+        frame.bindPipeline(self.pipeline);
+        frame.draw(3, 1, 0, 0);
+        frame.endRendering();
+
+        try frame.submit();
     }
 
     pub fn deinit(self: *@This(), _: *eggy.Context) void {

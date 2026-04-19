@@ -78,8 +78,11 @@ pub fn WindowingModule(comptime options: WindowingModuleOptions, comptime sdl_ba
         }
 
         fn pollEvents(self: *@This(), ctx: *eggy.Context) !void {
-            _ = try self.window.getSurface();
-            try self.window.updateSurface();
+            // non-gpu backends cannot use the standard `Window.updateSurface` function otherwise it crashes the app
+            if (sdl_backend != .vulkan and sdl_backend != .opengl) {
+                _ = try self.window.getSurface();
+                try self.window.updateSurface();
+            }
 
             const keyboard = ctx.world.getResource(input.KeyboardInput);
             const mouse = ctx.world.getResource(input.MouseInput);

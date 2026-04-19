@@ -184,6 +184,7 @@ pub const Pipeline = struct {
     layout: vk.PipelineLayout,
 
     pub fn deinit(self: *Pipeline) void {
+        self.vulkan.await() catch {};
         self.vulkan.device.destroyPipeline(self.handle, null);
         self.vulkan.device.destroyPipelineLayout(self.layout, null);
     }

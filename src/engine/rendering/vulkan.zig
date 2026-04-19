@@ -1,5 +1,6 @@
 pub const vk = @import("vulkan");
 pub const pipeline = @import("pipeline.zig");
+pub const cmd = @import("command.zig");
 
 const sdl = @import("sdl3");
 const builtin = @import("builtin");
@@ -82,7 +83,8 @@ fn chooseSwapPresentMode(available_present_modes: []const vk.PresentModeKHR) vk.
 /// Inherits `BackendImpl`
 pub const EggyVulkanInterface = struct {
     pub const sdl_backend: SdlBackend = .vulkan;
-    pub const name = "Vulkan";
+    pub const backend_name = "Vulkan";
+    pub const MAX_FRAMES_IN_FLIGHT = 2;
 
     pub fn ensure_available() !void {
         try sdl.vulkan.loadLibrary(null);
@@ -107,6 +109,15 @@ pub const EggyVulkanInterface = struct {
 
     device: vk.DeviceProxy,
     queue: Queue,
+
+    command_pool: vk.CommandPool,
+    command_buffers: [MAX_FRAMES_IN_FLIGHT]vk.CommandBuffer,
+
+    present_completed_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore,
+    draw_fences: [MAX_FRAMES_IN_FLIGHT]vk.Fence,
+    current_frame: usize,
+
+    render_finished_semaphores: std.ArrayList(vk.Semaphore),
 
     pub fn init(allocator: Allocator, window: *sdl.video.Window, options: Options) !@This() {
         var self: @This() = undefined;
@@ -142,19 +153,40 @@ pub const EggyVulkanInterface = struct {
         try createLogicalDevice(&self);
         try createSwapchain(&self);
 
-        try createGraphicsPipeline(&self);
+        try createCommandPool(&self);
+        try createCommandBuffers(&self);
+
+        try createSyncObjects(&self);
 
         eggy.logger.debug("Initialised vulkan for eggy", @src()) catch {};
         return self;
     }
 
-    /// Initialize with default options.
+    /// A common function that waits for the device to finish operations before doing anything. 
+    // Other backends must implement this. 
+    pub fn await(self: @This()) !void {
+        try self.device.deviceWaitIdle();
+    }
+
+    /// Initialise with default options.
     pub fn initDefault(allocator: Allocator, window: *sdl.video.Window) !@This() {
         return init(allocator, window, .{});
     }
 
     pub fn deinit(self: *@This()) void {
-        self.device.deviceWaitIdle() catch {};
+        self.await() catch {};
+
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            self.device.destroyFence(self.draw_fences[i], null);
+            self.device.destroySemaphore(self.present_completed_semaphores[i], null);
+        }
+
+        self.device.destroyCommandPool(self.command_pool, null);
+
+        for (self.render_finished_semaphores.items) |sem| {
+            self.device.destroySemaphore(sem, null);
+        }
+        self.render_finished_semaphores.deinit(self.allocator);
 
         for (self.swapchain.image_views.items) |i| {
             self.device.destroyImageView(i, null);
@@ -478,7 +510,41 @@ pub const EggyVulkanInterface = struct {
         eggy.logger.debugf("Created swapchain with {d} images", .{swapchain_images.len}, @src()) catch {};
     }
 
-    fn createGraphicsPipeline(_: *@This()) !void {}
+    fn createCommandPool(self: *@This()) !void {
+        const poolInfo = vk.CommandPoolCreateInfo {
+            .flags = .{ .reset_command_buffer_bit = true },
+            .queue_family_index = self.queue.family_index,
+        };
+        self.command_pool = try self.device.createCommandPool(&poolInfo, null);
+    }
+
+    fn createCommandBuffers(self: *@This()) !void {
+        const alloc_info = vk.CommandBufferAllocateInfo{
+            .command_pool = self.command_pool,
+            .level = .primary,
+            .command_buffer_count = MAX_FRAMES_IN_FLIGHT,
+        };
+        try self.device.allocateCommandBuffers(&alloc_info, &self.command_buffers);
+    }
+
+    fn createSyncObjects(self: *@This()) !void {
+        const semaphore_info: vk.SemaphoreCreateInfo = .{};
+        const fence_info = vk.FenceCreateInfo {
+            .flags = .{ .signaled_bit = true }
+        };
+
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            self.present_completed_semaphores[i] = try self.device.createSemaphore(&semaphore_info, null);
+            self.draw_fences[i] = try self.device.createFence(&fence_info, null);
+        }
+        self.current_frame = 0;
+
+        self.render_finished_semaphores = .empty;
+        for (0..self.swapchain.swapchain_image.items.len) |_| {
+            const sem = try self.device.createSemaphore(&semaphore_info, null);
+            try self.render_finished_semaphores.append(self.allocator, sem);
+        }
+    }
 };
 
 fn debugCallback(

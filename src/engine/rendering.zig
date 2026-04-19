@@ -29,7 +29,7 @@ pub fn RenderingModule(comptime BackendImpl: type) type {
                 try BackendImpl.ensure_available();
             }
 
-            const backend_name = if (@hasDecl(BackendImpl, "name")) BackendImpl.name else @typeName(BackendImpl);
+            const backend_name = if (@hasDecl(BackendImpl, "backend_name")) BackendImpl.backend_name else @typeName(BackendImpl);
             eggy.logger.infof("Using backend [{s}]", .{backend_name}, @src()) catch {};
 
             const window = ctx.world.getResource(sdl.video.Window) orelse return error.WindowNotFound;
