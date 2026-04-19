@@ -1,6 +1,7 @@
 pub const vk = @import("vulkan");
 pub const pipeline = @import("pipeline.zig");
 pub const cmd = @import("command.zig");
+pub const swapchain = @import("swapchain.zig");
 
 const sdl = @import("sdl3");
 const builtin = @import("builtin");
@@ -33,53 +34,6 @@ const Queue = struct {
     inner: vk.Queue,
 };
 
-pub const Swapchain = struct {
-    swapchain: vk.SwapchainKHR,
-    swapchain_image: std.ArrayList(vk.Image),
-    surface_format: vk.SurfaceFormatKHR,
-    swapchain_extent: vk.Extent2D,
-    image_views: std.ArrayList(vk.ImageView),
-};
-
-fn chooseSwapExtent(capabilities: vk.SurfaceCapabilitiesKHR, window: *sdl.video.Window) vk.Extent2D {
-    if (capabilities.current_extent.width != std.math.maxInt(u32)) {
-        return capabilities.current_extent;
-    }
-
-    const size = window.getSize() catch return capabilities.current_extent;
-    return .{
-        .width = std.math.clamp(@as(u32, @intCast(size[0])), capabilities.min_image_extent.width, capabilities.max_image_extent.width),
-        .height = std.math.clamp(@as(u32, @intCast(size[1])), capabilities.min_image_extent.height, capabilities.max_image_extent.height),
-    };
-}
-
-fn chooseSwapMinImageCount(capabilities: vk.SurfaceCapabilitiesKHR) u32 {
-    var min_img_cnt = @max(3, capabilities.min_image_count);
-    if ((0 < capabilities.max_image_count) and (capabilities.max_image_count < min_img_cnt)) {
-        min_img_cnt = capabilities.max_image_count;
-    }
-    return min_img_cnt;
-}
-
-fn chooseSwapSurfaceFormat(available_formats: []const vk.SurfaceFormatKHR) vk.SurfaceFormatKHR {
-    std.debug.assert(available_formats.len > 0);
-    for (available_formats) |format| {
-        if (format.format == .b8g8r8a8_srgb and format.color_space == .srgb_nonlinear_khr) {
-            return format;
-        }
-    }
-    return available_formats[0];
-}
-
-fn chooseSwapPresentMode(available_present_modes: []const vk.PresentModeKHR) vk.PresentModeKHR {
-    for (available_present_modes) |mode| {
-        if (mode == .mailbox_khr) {
-            return .mailbox_khr;
-        }
-    }
-    return .fifo_khr;
-}
-
 /// Inherits `BackendImpl`
 pub const EggyVulkanInterface = struct {
     pub const sdl_backend: SdlBackend = .vulkan;
@@ -105,7 +59,7 @@ pub const EggyVulkanInterface = struct {
     pdev: vk.PhysicalDevice,
     props: vk.PhysicalDeviceProperties,
     mem_props: vk.PhysicalDeviceMemoryProperties,
-    swapchain: Swapchain,
+    swapchain: swapchain.Swapchain,
 
     device: vk.DeviceProxy,
     queue: Queue,
@@ -116,6 +70,7 @@ pub const EggyVulkanInterface = struct {
     present_completed_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore,
     draw_fences: [MAX_FRAMES_IN_FLIGHT]vk.Fence,
     current_frame: usize,
+    framebuffer_resized: bool,
 
     render_finished_semaphores: std.ArrayList(vk.Semaphore),
 
@@ -151,7 +106,7 @@ pub const EggyVulkanInterface = struct {
 
         try pickPhysicalDevice(&self);
         try createLogicalDevice(&self);
-        try createSwapchain(&self);
+        self.swapchain = try swapchain.Swapchain.init(&self);
 
         try createCommandPool(&self);
         try createCommandBuffers(&self);
@@ -167,7 +122,6 @@ pub const EggyVulkanInterface = struct {
     pub fn await(self: @This()) !void {
         try self.device.deviceWaitIdle();
     }
-
     /// Initialise with default options.
     pub fn initDefault(allocator: Allocator, window: *sdl.video.Window) !@This() {
         return init(allocator, window, .{});
@@ -188,12 +142,7 @@ pub const EggyVulkanInterface = struct {
         }
         self.render_finished_semaphores.deinit(self.allocator);
 
-        for (self.swapchain.image_views.items) |i| {
-            self.device.destroyImageView(i, null);
-        }
-        self.swapchain.image_views.deinit(self.allocator);
-        self.swapchain.swapchain_image.deinit(self.allocator);
-        self.device.destroySwapchainKHR(self.swapchain.swapchain, null);
+        self.swapchain.deinit();
 
         self.device.destroyDevice(null);
         self.allocator.destroy(self.device.wrapper);
@@ -452,64 +401,6 @@ pub const EggyVulkanInterface = struct {
         eggy.logger.debug("Created logical device and queue", @src()) catch {};
     }
 
-    fn createSwapchain(self: *@This()) !void {
-        const capabilities = try self.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(self.pdev, self.surface);
-        self.swapchain.swapchain_extent = chooseSwapExtent(capabilities, self.window);
-        const min_image_count = chooseSwapMinImageCount(capabilities);
-
-        const available_formats = try self.instance.getPhysicalDeviceSurfaceFormatsAllocKHR(self.pdev, self.surface, self.allocator);
-        defer self.allocator.free(available_formats);
-        self.swapchain.surface_format = chooseSwapSurfaceFormat(available_formats);
-
-        const available_present_modes = try self.instance.getPhysicalDeviceSurfacePresentModesAllocKHR(self.pdev, self.surface, self.allocator);
-        defer self.allocator.free(available_present_modes);
-        const present_mode = chooseSwapPresentMode(available_present_modes);
-
-        const swapchain_create_info = vk.SwapchainCreateInfoKHR{
-            .surface = self.surface,
-            .min_image_count = min_image_count,
-            .image_format = self.swapchain.surface_format.format,
-            .image_color_space = self.swapchain.surface_format.color_space,
-            .image_extent = self.swapchain.swapchain_extent,
-            .image_array_layers = 1,
-            .image_usage = .{ .color_attachment_bit = true },
-            .image_sharing_mode = .exclusive,
-            .pre_transform = capabilities.current_transform,
-            .composite_alpha = .{ .opaque_bit_khr = true },
-            .present_mode = present_mode,
-            .clipped = .true,
-        };
-
-        self.swapchain.swapchain = try self.device.createSwapchainKHR(&swapchain_create_info, null);
-
-        const swapchain_images = try self.device.getSwapchainImagesAllocKHR(self.swapchain.swapchain, self.allocator);
-        defer self.allocator.free(swapchain_images);
-
-        self.swapchain.swapchain_image = .empty;
-        try self.swapchain.swapchain_image.appendSlice(self.allocator, swapchain_images);
-
-        self.swapchain.image_views = .empty;
-        for (swapchain_images) |image| {
-            const image_view_create_info = vk.ImageViewCreateInfo{
-                .image = image,
-                .view_type = .@"2d",
-                .format = self.swapchain.surface_format.format,
-                .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
-                .subresource_range = .{
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = 0,
-                    .level_count = 1,
-                    .base_array_layer = 0,
-                    .layer_count = 1,
-                },
-            };
-            const image_view = try self.device.createImageView(&image_view_create_info, null);
-            try self.swapchain.image_views.append(self.allocator, image_view);
-        }
-
-        eggy.logger.debugf("Created swapchain with {d} images", .{swapchain_images.len}, @src()) catch {};
-    }
-
     fn createCommandPool(self: *@This()) !void {
         const poolInfo = vk.CommandPoolCreateInfo {
             .flags = .{ .reset_command_buffer_bit = true },
@@ -538,9 +429,10 @@ pub const EggyVulkanInterface = struct {
             self.draw_fences[i] = try self.device.createFence(&fence_info, null);
         }
         self.current_frame = 0;
+        self.framebuffer_resized = false;
 
         self.render_finished_semaphores = .empty;
-        for (0..self.swapchain.swapchain_image.items.len) |_| {
+        for (0..self.swapchain.swapchain_images.items.len) |_| {
             const sem = try self.device.createSemaphore(&semaphore_info, null);
             try self.render_finished_semaphores.append(self.allocator, sem);
         }

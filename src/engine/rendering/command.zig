@@ -18,6 +18,12 @@ pub const Frame = struct {
         CommandBufferBeginFailed,
     };
 
+    pub const SubmitResult = enum {
+        success,
+        swapchain_out_of_date,
+        swapchain_suboptimal,
+    };
+
     vulkan: *rendering.EggyVulkanInterface,
     cmd: vk.CommandBuffer,
     image_index: u32,
@@ -33,9 +39,6 @@ pub const Frame = struct {
         if (fence_result != .success) {
             return error.FenceWaitFailed;
         }
-        vulkan.device.resetFences(1, @ptrCast(&vulkan.draw_fences[frame_index])) catch {
-            return error.FenceWaitFailed;
-        };
         
         const acquire_result = vulkan.device.acquireNextImageKHR(
             vulkan.swapchain.swapchain,
@@ -53,6 +56,10 @@ pub const Frame = struct {
         if (acquire_result.result == .error_out_of_date_khr) {
             return error.SwapchainOutOfDate;
         }
+        
+        vulkan.device.resetFences(1, @ptrCast(&vulkan.draw_fences[frame_index])) catch {
+            return error.FenceWaitFailed;
+        };
 
         const cmd_buf = vulkan.command_buffers[frame_index];
         vulkan.device.resetCommandBuffer(cmd_buf, .{}) catch {
@@ -74,7 +81,7 @@ pub const Frame = struct {
     }
 
     /// Submit the command buffer and present the frame.
-    pub fn submit(self: *Frame) !void {
+    pub fn submit(self: *Frame) !SubmitResult {
         try self.vulkan.device.endCommandBuffer(self.cmd);
 
         const frame_index = self.frame_index;
@@ -99,9 +106,25 @@ pub const Frame = struct {
             .p_swapchains = @ptrCast(&self.vulkan.swapchain.swapchain),
             .p_image_indices = @ptrCast(&self.image_index),
         };
-        _ = try self.vulkan.device.queuePresentKHR(self.vulkan.queue.inner, &present_info);
+        
+        const present_result = self.vulkan.device.queuePresentKHR(self.vulkan.queue.inner, &present_info) catch |err| {
+            return switch (err) {
+                error.OutOfDateKHR => .swapchain_out_of_date,
+                else => err,
+            };
+        };
         
         self.vulkan.current_frame = (self.vulkan.current_frame + 1) % rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT;
+        
+        if (present_result == .suboptimal_khr) {
+            return .swapchain_suboptimal;
+        }
+        if (self.vulkan.framebuffer_resized) {
+            self.vulkan.framebuffer_resized = false;
+            return .swapchain_suboptimal;
+        }
+        
+        return .success;
     }
 
     /// Begin rendering to the swapchain image with the specified clear color.
@@ -184,7 +207,7 @@ pub const Frame = struct {
             .new_layout = new_layout,
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .image = self.vulkan.swapchain.swapchain_image.items[self.image_index],
+            .image = self.vulkan.swapchain.swapchain_images.items[self.image_index],
             .subresource_range = .{
                 .aspect_mask = .{ .color_bit = true },
                 .base_mip_level = 0,
@@ -236,7 +259,7 @@ pub const Frame = struct {
 
     /// Get the current swapchain image.
     pub fn swapchainImage(self: *Frame) vk.Image {
-        return self.vulkan.swapchain.swapchain_image.items[self.image_index];
+        return self.vulkan.swapchain.swapchain_images.items[self.image_index];
     }
 
     /// Get the current swapchain image view.

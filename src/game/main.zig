@@ -61,7 +61,7 @@ pub const VKModule = struct {
             },
             error.SwapchainOutOfDate => {
                 std.debug.print("Frame.acquire failed: SwapchainOutOfDate\n", .{});
-                // TODO: recreate swapchain
+                try vulkan.swapchain.recreate(vulkan);
                 return;
             },
             else => {
@@ -75,7 +75,10 @@ pub const VKModule = struct {
         frame.draw(3, 1, 0, 0);
         frame.endRendering();
 
-        try frame.submit();
+        const submit_result = try frame.submit();
+        if (submit_result == .swapchain_out_of_date or submit_result == .swapchain_suboptimal) {
+            try vulkan.swapchain.recreate(vulkan);
+        }
     }
 
     pub fn deinit(self: *@This(), _: *eggy.Context) void {
