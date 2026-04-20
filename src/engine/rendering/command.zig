@@ -167,7 +167,7 @@ pub const Frame = struct {
     frame_index: usize,
 
     /// Acquire the next swapchain image and prepare for recording.
-    pub fn acquire(vulkan: *rendering.EggyVulkanInterface) AcquireError!Frame {
+    pub fn acquire(vulkan: *rendering.EggyVulkanInterface, label: [*:0]const u8) AcquireError!Frame {
         const frame_index = vulkan.current_frame;
         
         const fence_result = vulkan.device.waitForFences(1, @ptrCast(&vulkan.draw_fences[frame_index]), .true, std.math.maxInt(u64)) catch {
@@ -202,6 +202,8 @@ pub const Frame = struct {
         vulkan.device.resetCommandBuffer(cmd_buf, .{}) catch {
             return error.CommandBufferResetFailed;
         };
+
+        @import("debug.zig").vkSetName(vulkan.device, vk.CommandBuffer, cmd_buf, label);
 
         vulkan.device.beginCommandBuffer(cmd_buf, &.{
             .flags = .{ .one_time_submit_bit = true },

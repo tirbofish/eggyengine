@@ -107,7 +107,7 @@ pub const VKModule = struct {
         var shader = try pipeline.Shader.init_from_file(vulkan, shader_file, ctx.allocator);
         defer shader.deinit();
 
-        var builder = pipeline.Pipeline.builder(vulkan, ctx.allocator);
+        var builder = pipeline.Pipeline.builder(vulkan, ctx.allocator, "main pipeline");
         defer builder.deinit();
         self.pipeline = try builder
             .vertexShader(shader.module, "vertMain")
@@ -121,10 +121,10 @@ pub const VKModule = struct {
             .addVertexAttributes(&Vertex.getAttributeDescriptions())
             .build();
         
-        self.vertex_buffer = try rendering.buffer.VertexBuffer(Vertex).init(vulkan, &vertices);
-        self.index_buffer = try rendering.buffer.IndexBuffer(u16).init(vulkan, &indices);
+        self.vertex_buffer = try rendering.buffer.VertexBuffer(Vertex).init(vulkan, &vertices, "quad vertex buffer");
+        self.index_buffer = try rendering.buffer.IndexBuffer(u16).init(vulkan, &indices, "quad index buffer");
 
-        self.uniform_buffer = try rendering.buffer.UniformBuffer(UBO).init(vulkan, self.pipeline);
+        self.uniform_buffer = try rendering.buffer.UniformBuffer(UBO).init(vulkan, self.pipeline, "uniform buffer");
         self.start_time = std.time.nanoTimestamp();
     }
 
@@ -155,7 +155,7 @@ pub const VKModule = struct {
     pub fn render(self: *@This(), ctx: *eggy.Context) !void {
         const vulkan = ctx.world.getResource(eggy.module.rendering.vulkan.EggyVulkanInterface) orelse return;
 
-        var frame = cmd.Frame.acquire(vulkan) catch |err| switch (err) {
+        var frame = cmd.Frame.acquire(vulkan, "command buffer") catch |err| switch (err) {
             error.SurfaceLost => {
                 std.debug.print("Frame.acquire failed: SurfaceLost\n", .{});
                 ctx.quit();

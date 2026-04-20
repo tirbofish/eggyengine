@@ -117,6 +117,7 @@ pub const RawBuffer = struct {
         size: vk.DeviceSize,
         usage: BufferUsageFlags,
         mem_properties: MemoryPropertyFlags,
+        label: ?[*:0]const u8,
     ) !RawBuffer {
         const buffer_info = vk.BufferCreateInfo{
             .size = size,
@@ -125,6 +126,7 @@ pub const RawBuffer = struct {
         };
 
         const buffer = try e_vulkan.device.createBuffer(&buffer_info, null);
+        rendering.vkSetName(e_vulkan.device, vk.Buffer, buffer, label);
         errdefer e_vulkan.device.destroyBuffer(buffer, null);
 
         const memRequirements = e_vulkan.device.getBufferMemoryRequirements(buffer);
@@ -138,7 +140,7 @@ pub const RawBuffer = struct {
         errdefer e_vulkan.device.freeMemory(mem, null);
 
         try e_vulkan.device.bindBufferMemory(buffer, mem, 0);
-
+        try @import("../eggy.zig").logger.tracef("Initialised new buffer '{any}' [flags={any}]", .{label, usage}, @src());
         return RawBuffer{
             .e_vulkan = e_vulkan,
             .buffer = buffer,
@@ -300,13 +302,19 @@ pub fn VertexBuffer(comptime T: type) type {
         raw: RawBuffer,
         len: usize,
 
-        pub fn init(e_vulkan: *rendering.EggyVulkanInterface, data: []const T) !@This() {
+        pub fn init(e_vulkan: *rendering.EggyVulkanInterface, data: []const T, label: ?[*:0]const u8) !@This() {
             const size: vk.DeviceSize = @sizeOf(T) * data.len;
 
-            var staging = try RawBuffer.init(e_vulkan, size, .{ .TransferSrc = true }, .{
-                .HostVisible = true,
-                .HostCoherent = true,
-            });
+            var staging = try RawBuffer.init(
+                e_vulkan, 
+                size, 
+                .{ .TransferSrc = true }, 
+                .{
+                    .HostVisible = true,
+                    .HostCoherent = true,
+                },
+                label
+            );
             defer staging.deinit();
 
             try staging.copyFromSlice(T, data);
@@ -316,7 +324,7 @@ pub fn VertexBuffer(comptime T: type) type {
                 .TransferDst = true,
             }, .{
                 .DeviceLocal = true,
-            });
+            }, label);
             errdefer raw.deinit();
 
             try copyBuffer(e_vulkan, staging.buffer, raw.buffer, size);
@@ -340,13 +348,14 @@ pub fn IndexBuffer(comptime T: type) type {
         len: usize,
 
         /// T should be u16 or u32.
-        pub fn init(e_vulkan: *rendering.EggyVulkanInterface, data: []const T) !@This() {
+        pub fn init(e_vulkan: *rendering.EggyVulkanInterface, data: []const T, label: ?[*:0]const u8) !@This() {
             const size: vk.DeviceSize = @sizeOf(T) * data.len;
 
             var staging = try RawBuffer.init(e_vulkan, size, .{ .TransferSrc = true }, .{
                 .HostVisible = true,
                 .HostCoherent = true,
-            });
+            },
+            label);
             defer staging.deinit();
 
             try staging.copyFromSlice(T, data);
@@ -356,7 +365,7 @@ pub fn IndexBuffer(comptime T: type) type {
                 .TransferDst = true,
             }, .{
                 .DeviceLocal = true,
-            });
+            }, label);
             errdefer raw.deinit();
 
             try copyBuffer(e_vulkan, staging.buffer, raw.buffer, size);
@@ -384,14 +393,14 @@ pub fn UniformBuffer(comptime T: type) type {
         descriptor_sets: [rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT]vk.DescriptorSet,
 
         /// Create a uniform buffer bound to a pipeline's descriptor set layout.
-        pub fn init(e_vulkan: *rendering.EggyVulkanInterface, p: pipeline.Pipeline) !@This() {
+        pub fn init(e_vulkan: *rendering.EggyVulkanInterface, p: pipeline.Pipeline, label: ?[*:0]const u8) !@This() {
             const descriptor_set_layout = p.descriptor_set_layout;
             const size: vk.DeviceSize = @sizeOf(T);
 
             const raw = try RawBuffer.init(e_vulkan, size, .{ .UniformBuffer = true }, .{
                 .HostVisible = true,
                 .HostCoherent = true,
-            });
+            }, label);
             errdefer raw.deinit();
 
             const mapped_ptr = try e_vulkan.device.mapMemory(raw.mem, 0, size, .{});
@@ -446,6 +455,8 @@ pub fn UniformBuffer(comptime T: type) type {
 
                 e_vulkan.device.updateDescriptorSets(1, @ptrCast(&descriptor_write), 0, null);
             }
+
+            // try logger.tracef("Initialised new UniformBuffer");
 
             return .{
                 .raw = raw,

@@ -3,6 +3,7 @@ pub const pipeline = @import("pipeline.zig");
 pub const cmd = @import("command.zig");
 pub const swapchain = @import("swapchain.zig");
 pub const buffer = @import("buffer.zig");
+pub const vkSetName = @import("debug.zig").vkSetName;
 
 const sdl = @import("sdl3");
 const builtin = @import("builtin");
@@ -166,7 +167,7 @@ pub const EggyVulkanInterface = struct {
 
         if (self.options.enable_validation_layers) {
             if (try checkLayerSupport(&self.vkb, self.allocator, &.{validation_layer_name}) == false) {
-                return error.MissingValidationLayer;
+                return error.MissingValidationLayer; // or potentially skip without validation?
             }
         }
 
@@ -449,6 +450,17 @@ fn debugCallback(
     _ = message_type;
     _ = p_user_data;
 
+    // NOTE: enabling this code will cause a segfault. it is best to use std.debug.print
+    // if (p_callback_data) |data| {
+    //     if (message_severity.error_bit_ext) {
+    //         eggy.logger.errf("[vulkan] {s}\n", .{ data.p_message orelse "(no message)" }, @src()) catch {};
+    //     }
+    //     else if (message_severity.warning_bit_ext)
+    //         {eggy.logger.warnf("[vulkan] {s}\n", .{ data.p_message orelse "(no message)" }, @src()) catch {};}
+    //     else
+    //         {eggy.logger.infof("[vulkan] {s}\n", .{ data.p_message orelse "(no message)" }, @src()) catch {};}
+    // }
+
     const severity_str = if (message_severity.error_bit_ext)
         "ERROR"
     else if (message_severity.warning_bit_ext)
@@ -457,7 +469,6 @@ fn debugCallback(
         "INFO";
 
     if (p_callback_data) |data| {
-        // avoid allocator issues during cleanup, dont use `eggy.logger`
         std.debug.print("[vulkan] [{s}] {s}\n", .{ severity_str, data.p_message orelse "(no message)" });
     }
 

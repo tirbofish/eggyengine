@@ -373,14 +373,15 @@ pub const Pipeline = struct {
     }
 
     /// Start building a new graphics pipeline.
-    pub fn builder(vulkan: *rendering.EggyVulkanInterface, allocator: std.mem.Allocator) PipelineBuilder {
-        return PipelineBuilder.init(vulkan, allocator);
+    pub fn builder(vulkan: *rendering.EggyVulkanInterface, allocator: std.mem.Allocator, label: ?[*:0]const u8) PipelineBuilder {
+        return PipelineBuilder.init(vulkan, allocator, label);
     }
 };
 
 pub const PipelineBuilder = struct {
     vulkan: *rendering.EggyVulkanInterface,
     allocator: std.mem.Allocator,
+    label: ?[*:0]const u8,
 
     // Shader stages
     vert_module: ?vk.ShaderModule = null,
@@ -424,13 +425,14 @@ pub const PipelineBuilder = struct {
     // Descriptor set layout bindings
     descriptor_bindings: std.ArrayList(vk.DescriptorSetLayoutBinding),
 
-    pub fn init(vulkan: *rendering.EggyVulkanInterface, allocator: std.mem.Allocator) PipelineBuilder {
+    pub fn init(vulkan: *rendering.EggyVulkanInterface, allocator: std.mem.Allocator, label: ?[*:0]const u8) PipelineBuilder {
         return .{
             .vulkan = vulkan,
             .allocator = allocator,
             .binding_descriptions = std.ArrayList(vk.VertexInputBindingDescription).empty,
             .attribute_descriptions = std.ArrayList(vk.VertexInputAttributeDescription).empty,
             .descriptor_bindings = std.ArrayList(vk.DescriptorSetLayoutBinding).empty,
+            .label = label,
         };
     }
 
@@ -696,6 +698,8 @@ pub const PipelineBuilder = struct {
             null,
             @ptrCast(&handle),
         );
+        rendering.vkSetName(self.vulkan.device, vk.Pipeline, handle, self.label);
+        try @import("../eggy.zig").logger.tracef("Initialised new pipeline '{any}", .{self.label}, @src());
 
         return Pipeline{
             .vulkan = self.vulkan,
