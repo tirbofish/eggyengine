@@ -2,449 +2,106 @@
 
 const std = @import("std");
 
+// --------------- vectors ---------------
+const vec = @import("math/vec.zig");
 
-pub fn Vector2(comptime T: type) type {
-    return extern struct {
-        x: T,
-        y: T,
+pub const Vec2 = vec.Vector2(f32);
+pub const Vec3 = vec.Vector3(f32);
+pub const Vec4 = vec.Vector4(f32);
 
-        const Self = @This();
-        pub const Vec = @Vector(2, T);
+pub const Vec2d = vec.Vector2(f64);
+pub const Vec3d = vec.Vector3(f64);
+pub const Vec4d = vec.Vector4(f64);
 
-        pub const zero = Self{ .x = 0, .y = 0 };
-        pub const one = Self{ .x = 1, .y = 1 };
-        pub const unit_x = Self{ .x = 1, .y = 0 };
-        pub const unit_y = Self{ .x = 0, .y = 1 };
+pub const Vec2i = vec.Vector2(i32);
+pub const Vec3i = vec.Vector3(i32);
+pub const Vec4i = vec.Vector4(i32);
 
-        pub fn init(x: T, y: T) Self {
-            return .{ .x = x, .y = y };
-        }
+pub const Vec2u = vec.Vector2(u32);
+pub const Vec3u = vec.Vector3(u32);
+pub const Vec4u = vec.Vector4(u32);
 
-        pub fn splat(value: T) Self {
-            return .{ .x = value, .y = value };
-        }
+// --------------- matrices ---------------
+const mat = @import("math/mat.zig");
 
-        pub fn fromArray(arr: [2]T) Self {
-            return .{ .x = arr[0], .y = arr[1] };
-        }
+pub const Mat2 = mat.Mat2;
+pub const Mat3 = mat.Mat3;
+pub const Mat4 = mat.Mat4;
 
-        pub fn toArray(self: Self) [2]T {
-            return .{ self.x, self.y };
-        }
+pub const Mat2d = mat.Mat2d;
+pub const Mat3d = mat.Mat3d;
+pub const Mat4d = mat.Mat4d;
 
-        fn toVec(self: Self) Vec {
-            return .{ self.x, self.y };
-        }
+pub const Mat2i = mat.Mat2i;
+pub const Mat3i = mat.Mat3i;
+pub const Mat4i = mat.Mat4i;
 
-        fn fromVec(v: Vec) Self {
-            return .{ .x = v[0], .y = v[1] };
-        }
+pub const Matrix = mat.Matrix;
 
-        pub fn add(self: Self, other: Self) Self {
-            return fromVec(self.toVec() + other.toVec());
-        }
+// Matrix operations (standalone functions)
+pub const identity = mat.identity;
+pub const zero = mat.zero;
+pub const splat = mat.splat;
+pub const fromArray = mat.fromArray;
+pub const add = mat.add;
+pub const sub = mat.sub;
+pub const scale = mat.scale;
+pub const mul = mat.mul;
+pub const transpose = mat.transpose;
 
-        pub fn sub(self: Self, other: Self) Self {
-            return fromVec(self.toVec() - other.toVec());
-        }
+// 2x2 matrix operations
+pub const determinant2x2 = mat.determinant2x2;
+pub const inverse2x2 = mat.inverse2x2;
+pub const rotation2x2 = mat.rotation2x2;
+pub const scaling2x2 = mat.scaling2x2;
 
-        pub fn mul(self: Self, other: Self) Self {
-            return fromVec(self.toVec() * other.toVec());
-        }
+// 3x3 matrix operations
+pub const determinant3x3 = mat.determinant3x3;
+pub const rotationX3x3 = mat.rotationX3x3;
+pub const rotationY3x3 = mat.rotationY3x3;
+pub const rotationZ3x3 = mat.rotationZ3x3;
+pub const scaling3x3 = mat.scaling3x3;
+pub const transformVec3by3x3 = mat.transformVec3by3x3;
 
-        pub fn div(self: Self, other: Self) Self {
-            return fromVec(self.toVec() / other.toVec());
-        }
+// 4x4 matrix operations
+pub const translation4x4 = mat.translation4x4;
+pub const translationVec4x4 = mat.translationVec4x4;
+pub const scaling4x4 = mat.scaling4x4;
+pub const uniformScaling4x4 = mat.uniformScaling4x4;
+pub const rotationX4x4 = mat.rotationX4x4;
+pub const rotationY4x4 = mat.rotationY4x4;
+pub const rotationZ4x4 = mat.rotationZ4x4;
+pub const rotationAxis4x4 = mat.rotationAxis4x4;
+pub const lookAt4x4 = mat.lookAt4x4;
+pub const perspective4x4 = mat.perspective4x4;
+pub const orthographic4x4 = mat.orthographic4x4;
+pub const orthographicVk4x4 = mat.orthographicVk4x4;
+pub const transformVec4by4x4 = mat.transformVec4by4x4;
+pub const transformPoint4x4 = mat.transformPoint4x4;
+pub const transformDirection4x4 = mat.transformDirection4x4;
+pub const multiply4x4 = mat.multiply4x4;
+pub const inverse4x4 = mat.inverse4x4;
 
-        pub fn scale(self: Self, scalar: T) Self {
-            return fromVec(self.toVec() * @as(Vec, @splat(scalar)));
-        }
+// Type validation
+pub const isPermittedType = mat.isPermittedType;
+pub const isFloatType = mat.isFloatType;
 
-        pub fn negate(self: Self) Self {
-            return fromVec(-self.toVec());
-        }
+// --------------- quaternions ---------------
+const quat = @import("math/quat.zig");
 
-        pub fn dot(self: Self, other: Self) T {
-            return @reduce(.Add, self.toVec() * other.toVec());
-        }
+pub const Quat = quat.Quat;
+pub const Quatd = quat.Quatd;
+pub const Quaternion = quat.Quaternion;
 
-        pub fn lengthSquared(self: Self) T {
-            return self.dot(self);
-        }
+// --------------- helpers ---------------
+pub fn rotate(angle: f32, axis: Vec3) Quat {return Quat.identity().rotate(angle, axis);}
 
-        pub fn length(self: Self) T {
-            return @sqrt(self.lengthSquared());
-        }
-
-        pub fn normalize(self: Self) Self {
-            const len = self.length();
-            if (len == 0) return zero;
-            return self.scale(1.0 / len);
-        }
-
-        pub fn distance(self: Self, other: Self) T {
-            return self.sub(other).length();
-        }
-
-        pub fn distanceSquared(self: Self, other: Self) T {
-            return self.sub(other).lengthSquared();
-        }
-
-        pub fn lerp(self: Self, other: Self, t: T) Self {
-            return self.add(other.sub(self).scale(t));
-        }
-
-        pub fn min(self: Self, other: Self) Self {
-            return fromVec(@min(self.toVec(), other.toVec()));
-        }
-
-        pub fn max(self: Self, other: Self) Self {
-            return fromVec(@max(self.toVec(), other.toVec()));
-        }
-
-        pub fn clamp(self: Self, min_val: Self, max_val: Self) Self {
-            return self.max(min_val).min(max_val);
-        }
-
-        pub fn abs(self: Self) Self {
-            return fromVec(@abs(self.toVec()));
-        }
-
-        pub fn floor(self: Self) Self {
-            return fromVec(@floor(self.toVec()));
-        }
-
-        pub fn ceil(self: Self) Self {
-            return fromVec(@ceil(self.toVec()));
-        }
-
-        pub fn round(self: Self) Self {
-            return fromVec(@round(self.toVec()));
-        }
-
-        /// Perpendicular vector (rotated 90 degrees counter-clockwise)
-        pub fn perpendicular(self: Self) Self {
-            return .{ .x = -self.y, .y = self.x };
-        }
-
-        /// Angle in radians from positive x-axis
-        pub fn angle(self: Self) T {
-            return std.math.atan2(self.y, self.x);
-        }
-
-        /// Create from angle (in radians) and length
-        pub fn fromAngle(a: T, len: T) Self {
-            return .{ .x = @cos(a) * len, .y = @sin(a) * len };
-        }
-
-        pub fn eql(self: Self, other: Self) bool {
-            return self.x == other.x and self.y == other.y;
-        }
-
-        pub fn approxEql(self: Self, other: Self, epsilon: T) bool {
-            return @abs(self.x - other.x) <= epsilon and @abs(self.y - other.y) <= epsilon;
-        }
-    };
+/// Create a look-at view matrix using f32.
+pub fn lookAt(eye: Vec3, target: Vec3, up: Vec3) Mat4 {
+    return lookAt4x4(f32, eye, target, up);
 }
 
-pub fn Vector3(comptime T: type) type {
-    return extern struct {
-        x: T,
-        y: T,
-        z: T,
-
-        const Self = @This();
-        pub const Vec = @Vector(4, T); // Use 4 for alignment, ignore w
-
-        pub const zero = Self{ .x = 0, .y = 0, .z = 0 };
-        pub const one = Self{ .x = 1, .y = 1, .z = 1 };
-        pub const unit_x = Self{ .x = 1, .y = 0, .z = 0 };
-        pub const unit_y = Self{ .x = 0, .y = 1, .z = 0 };
-        pub const unit_z = Self{ .x = 0, .y = 0, .z = 1 };
-        pub const up = unit_y;
-        pub const down = Self{ .x = 0, .y = -1, .z = 0 };
-        pub const forward = Self{ .x = 0, .y = 0, .z = -1 };
-        pub const back = unit_z;
-        pub const left = Self{ .x = -1, .y = 0, .z = 0 };
-        pub const right = unit_x;
-
-        pub fn init(x: T, y: T, z: T) Self {
-            return .{ .x = x, .y = y, .z = z };
-        }
-
-        pub fn splat(value: T) Self {
-            return .{ .x = value, .y = value, .z = value };
-        }
-
-        pub fn fromArray(arr: [3]T) Self {
-            return .{ .x = arr[0], .y = arr[1], .z = arr[2] };
-        }
-
-        pub fn toArray(self: Self) [3]T {
-            return .{ self.x, self.y, self.z };
-        }
-
-        fn toVec(self: Self) Vec {
-            return .{ self.x, self.y, self.z, 0 };
-        }
-
-        fn fromVec(v: Vec) Self {
-            return .{ .x = v[0], .y = v[1], .z = v[2] };
-        }
-
-        pub fn add(self: Self, other: Self) Self {
-            return fromVec(self.toVec() + other.toVec());
-        }
-
-        pub fn sub(self: Self, other: Self) Self {
-            return fromVec(self.toVec() - other.toVec());
-        }
-
-        pub fn mul(self: Self, other: Self) Self {
-            return fromVec(self.toVec() * other.toVec());
-        }
-
-        pub fn div(self: Self, other: Self) Self {
-            return fromVec(self.toVec() / other.toVec());
-        }
-
-        pub fn scale(self: Self, scalar: T) Self {
-            return fromVec(self.toVec() * @as(Vec, @splat(scalar)));
-        }
-
-        pub fn negate(self: Self) Self {
-            return fromVec(-self.toVec());
-        }
-
-        pub fn dot(self: Self, other: Self) T {
-            const v = self.toVec() * other.toVec();
-            return v[0] + v[1] + v[2];
-        }
-
-        pub fn cross(self: Self, other: Self) Self {
-            return .{
-                .x = self.y * other.z - self.z * other.y,
-                .y = self.z * other.x - self.x * other.z,
-                .z = self.x * other.y - self.y * other.x,
-            };
-        }
-
-        pub fn lengthSquared(self: Self) T {
-            return self.dot(self);
-        }
-
-        pub fn length(self: Self) T {
-            return @sqrt(self.lengthSquared());
-        }
-
-        pub fn normalize(self: Self) Self {
-            const len = self.length();
-            if (len == 0) return zero;
-            return self.scale(1.0 / len);
-        }
-
-        pub fn distance(self: Self, other: Self) T {
-            return self.sub(other).length();
-        }
-
-        pub fn distanceSquared(self: Self, other: Self) T {
-            return self.sub(other).lengthSquared();
-        }
-
-        pub fn lerp(self: Self, other: Self, t: T) Self {
-            return self.add(other.sub(self).scale(t));
-        }
-
-        pub fn min(self: Self, other: Self) Self {
-            return fromVec(@min(self.toVec(), other.toVec()));
-        }
-
-        pub fn max(self: Self, other: Self) Self {
-            return fromVec(@max(self.toVec(), other.toVec()));
-        }
-
-        pub fn clamp(self: Self, min_val: Self, max_val: Self) Self {
-            return self.max(min_val).min(max_val);
-        }
-
-        pub fn abs(self: Self) Self {
-            return fromVec(@abs(self.toVec()));
-        }
-
-        pub fn floor(self: Self) Self {
-            return fromVec(@floor(self.toVec()));
-        }
-
-        pub fn ceil(self: Self) Self {
-            return fromVec(@ceil(self.toVec()));
-        }
-
-        pub fn round(self: Self) Self {
-            return fromVec(@round(self.toVec()));
-        }
-
-        /// Reflect vector off a surface with given normal
-        pub fn reflect(self: Self, normal: Self) Self {
-            return self.sub(normal.scale(2.0 * self.dot(normal)));
-        }
-
-        /// Project self onto other
-        pub fn project(self: Self, onto: Self) Self {
-            return onto.scale(self.dot(onto) / onto.dot(onto));
-        }
-
-        pub fn eql(self: Self, other: Self) bool {
-            return self.x == other.x and self.y == other.y and self.z == other.z;
-        }
-
-        pub fn approxEql(self: Self, other: Self, epsilon: T) bool {
-            return @abs(self.x - other.x) <= epsilon and
-                @abs(self.y - other.y) <= epsilon and
-                @abs(self.z - other.z) <= epsilon;
-        }
-
-        pub fn xy(self: Self) Vector2(T) {
-            return .{ .x = self.x, .y = self.y };
-        }
-    };
+/// Create a perspective projection matrix using f32.
+pub fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) Mat4 {
+    return perspective4x4(f32, fov_y, aspect, near, far);
 }
-
-pub fn Vector4(comptime T: type) type {
-    return extern struct {
-        x: T,
-        y: T,
-        z: T,
-        w: T,
-
-        const Self = @This();
-        pub const Vec = @Vector(4, T);
-
-        pub const zero = Self{ .x = 0, .y = 0, .z = 0, .w = 0 };
-        pub const one = Self{ .x = 1, .y = 1, .z = 1, .w = 1 };
-
-        pub fn init(x: T, y: T, z: T, w: T) Self {
-            return .{ .x = x, .y = y, .z = z, .w = w };
-        }
-
-        pub fn splat(value: T) Self {
-            return .{ .x = value, .y = value, .z = value, .w = value };
-        }
-
-        pub fn fromVec3(v: Vector3(T), w: T) Self {
-            return .{ .x = v.x, .y = v.y, .z = v.z, .w = w };
-        }
-
-        pub fn fromArray(arr: [4]T) Self {
-            return .{ .x = arr[0], .y = arr[1], .z = arr[2], .w = arr[3] };
-        }
-
-        pub fn toArray(self: Self) [4]T {
-            return .{ self.x, self.y, self.z, self.w };
-        }
-
-        fn toVec(self: Self) Vec {
-            return .{ self.x, self.y, self.z, self.w };
-        }
-
-        fn fromVec(v: Vec) Self {
-            return .{ .x = v[0], .y = v[1], .z = v[2], .w = v[3] };
-        }
-
-        pub fn add(self: Self, other: Self) Self {
-            return fromVec(self.toVec() + other.toVec());
-        }
-
-        pub fn sub(self: Self, other: Self) Self {
-            return fromVec(self.toVec() - other.toVec());
-        }
-
-        pub fn mul(self: Self, other: Self) Self {
-            return fromVec(self.toVec() * other.toVec());
-        }
-
-        pub fn div(self: Self, other: Self) Self {
-            return fromVec(self.toVec() / other.toVec());
-        }
-
-        pub fn scale(self: Self, scalar: T) Self {
-            return fromVec(self.toVec() * @as(Vec, @splat(scalar)));
-        }
-
-        pub fn negate(self: Self) Self {
-            return fromVec(-self.toVec());
-        }
-
-        pub fn dot(self: Self, other: Self) T {
-            return @reduce(.Add, self.toVec() * other.toVec());
-        }
-
-        pub fn lengthSquared(self: Self) T {
-            return self.dot(self);
-        }
-
-        pub fn length(self: Self) T {
-            return @sqrt(self.lengthSquared());
-        }
-
-        pub fn normalize(self: Self) Self {
-            const len = self.length();
-            if (len == 0) return zero;
-            return self.scale(1.0 / len);
-        }
-
-        pub fn lerp(self: Self, other: Self, t: T) Self {
-            return self.add(other.sub(self).scale(t));
-        }
-
-        pub fn min(self: Self, other: Self) Self {
-            return fromVec(@min(self.toVec(), other.toVec()));
-        }
-
-        pub fn max(self: Self, other: Self) Self {
-            return fromVec(@max(self.toVec(), other.toVec()));
-        }
-
-        pub fn clamp(self: Self, min_val: Self, max_val: Self) Self {
-            return self.max(min_val).min(max_val);
-        }
-
-        pub fn abs(self: Self) Self {
-            return fromVec(@abs(self.toVec()));
-        }
-
-        pub fn eql(self: Self, other: Self) bool {
-            return self.x == other.x and self.y == other.y and self.z == other.z and self.w == other.w;
-        }
-
-        pub fn approxEql(self: Self, other: Self, epsilon: T) bool {
-            return @abs(self.x - other.x) <= epsilon and
-                @abs(self.y - other.y) <= epsilon and
-                @abs(self.z - other.z) <= epsilon and
-                @abs(self.w - other.w) <= epsilon;
-        }
-
-        pub fn xyz(self: Self) Vector3(T) {
-            return .{ .x = self.x, .y = self.y, .z = self.z };
-        }
-
-        pub fn xy(self: Self) Vector2(T) {
-            return .{ .x = self.x, .y = self.y };
-        }
-    };
-}
-
-pub const Vec2 = Vector2(f32);
-pub const Vec3 = Vector3(f32);
-pub const Vec4 = Vector4(f32);
-
-pub const Vec2d = Vector2(f64);
-pub const Vec3d = Vector3(f64);
-pub const Vec4d = Vector4(f64);
-
-pub const Vec2i = Vector2(i32);
-pub const Vec3i = Vector3(i32);
-pub const Vec4i = Vector4(i32);
-
-pub const Vec2u = Vector2(u32);
-pub const Vec3u = Vector3(u32);
-pub const Vec4u = Vector4(u32);

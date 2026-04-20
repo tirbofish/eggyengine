@@ -79,6 +79,23 @@ pub const RenderPass = struct {
         self.frame.vulkan.device.cmdBindIndexBuffer(self.frame.cmd, vk_buffer, 0, index_type);
     }
 
+    /// Bind a descriptor set for the current frame. 
+    /// 
+    /// The `resource` argument must use a datatype that contains a field of `descriptor_sets`, so this includes UniformBuffers, StorageBuffers, Textures etc). 
+    pub fn bindDescriptor(self: *RenderPass, resource: anytype, p: pipeline.Pipeline) void {
+        const descriptor_set = resource.descriptor_sets[self.frame.frame_index];
+        self.frame.vulkan.device.cmdBindDescriptorSets(
+            self.frame.cmd,
+            .graphics,
+            p.layout,
+            0, // first set
+            1, // descriptor set count
+            @ptrCast(&descriptor_set),
+            0, // dynamic offset count
+            null, // dynamic offsets
+        );
+    }
+
     /// Draw vertices directly.
     pub fn draw(self: *RenderPass, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) void {
         self.frame.vulkan.device.cmdDraw(self.frame.cmd, vertex_count, instance_count, first_vertex, first_instance);

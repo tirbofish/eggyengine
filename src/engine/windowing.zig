@@ -9,10 +9,9 @@ pub const WindowingModuleOptions = struct {
         .gamepad = true,
     },
     title: [:0]const u8 = "eggyengine app",
-    size: eggy.math.Vector2(usize) = .{ .x = 800, .y = 600 },
+    size: eggy.math.Vec2 = .{ .x = 800, .y = 600 },
     window_flags: WindowFlags = .{
         .resizable = true,
-        .maximized = true,
     },
     frame_rate: FrameRateMode = .unlimited,
 };

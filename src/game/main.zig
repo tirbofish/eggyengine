@@ -22,6 +22,12 @@ fn escape_to_quit(ctx: *eggy.Context) !void {
     }
 }
 
+pub const UBO = struct {
+    model: eggy.math.Mat4 = eggy.math.identity(f32, 4),
+    view: eggy.math.Mat4 = eggy.math.identity(f32, 4),
+    proj: eggy.math.Mat4 = eggy.math.identity(f32, 4),
+};
+
 pub const Vertex = struct {
     position: eggy.math.Vec2,
     colour: eggy.colour.Colour,
@@ -77,12 +83,17 @@ pub const VKModule = struct {
     };
     
     pipeline: pipeline.Pipeline = undefined,
+    start_time: i128 = 0,
 
     vertex_buffer: rendering.buffer.VertexBuffer(Vertex) = undefined,
     index_buffer: rendering.buffer.IndexBuffer(u16) = undefined,
+    uniform_buffer: rendering.buffer.UniformBuffer(UBO) = undefined,
+
+    ubo: UBO = undefined,
 
     pub const schedules = .{
         .init = .{init},
+        .update = .{update},
         .render = .{render},
         .deinit = .{deinit},
     };
@@ -101,9 +112,10 @@ pub const VKModule = struct {
         self.pipeline = try builder
             .vertexShader(shader.module, "vertMain")
             .fragmentShader(shader.module, "fragMain")
+            .addDescriptorBinding(.uniformBuffer(0, .{ .vertex = true }))
             .topology(.triangle_list)
             .cullMode(.back)
-            .frontFace(.clockwise)
+            .frontFace(.counter_clockwise)
             .polygonMode(.fill)
             .addVertexBinding(Vertex.getBindingDescription())
             .addVertexAttributes(&Vertex.getAttributeDescriptions())
@@ -111,6 +123,33 @@ pub const VKModule = struct {
         
         self.vertex_buffer = try rendering.buffer.VertexBuffer(Vertex).init(vulkan, &vertices);
         self.index_buffer = try rendering.buffer.IndexBuffer(u16).init(vulkan, &indices);
+
+        self.uniform_buffer = try rendering.buffer.UniformBuffer(UBO).init(vulkan, self.pipeline);
+        self.start_time = std.time.nanoTimestamp();
+    }
+
+    pub fn update(self: *@This(), ctx: *eggy.Context) !void {
+        const vulkan = ctx.world.getResource(eggy.module.rendering.vulkan.EggyVulkanInterface) orelse return;
+        const currentTime = std.time.nanoTimestamp();
+        
+        const time: f32 = @as(f32, @floatFromInt(currentTime - self.start_time)) / 1_000_000_000.0;
+
+        self.ubo.model = eggy.math.Quat.identity().rotate(time * std.math.degreesToRadians(90.0), eggy.math.Vec3.unit_z).toMatrix();
+        self.ubo.view = eggy.math.lookAt(
+            eggy.math.Vec3.init(2.0, 2.0, 2.0),
+            eggy.math.Vec3.zero,
+            eggy.math.Vec3.unit_z
+        );
+        const aspect: f32 = @as(f32, @floatFromInt(vulkan.swapchain.swapchain_extent.width)) / 
+                            @as(f32, @floatFromInt(vulkan.swapchain.swapchain_extent.height));
+        self.ubo.proj = eggy.math.perspective(
+            std.math.degreesToRadians(45.0), 
+            aspect,
+            0.1,
+            10.0
+        );
+
+        self.uniform_buffer.write(self.ubo);
     }
 
     pub fn render(self: *@This(), ctx: *eggy.Context) !void {
@@ -146,6 +185,7 @@ pub const VKModule = struct {
             pass.setPipeline(self.pipeline);
             pass.setVertexBuffer(self.vertex_buffer);
             pass.setIndexBuffer(self.index_buffer, .uint16);
+            pass.bindDescriptor(self.uniform_buffer, self.pipeline);
             pass.drawIndexed(indices.len, 1, 0, 0, 0);
         }
 
@@ -158,6 +198,7 @@ pub const VKModule = struct {
     pub fn deinit(self: *@This(), _: *eggy.Context) void {
         self.vertex_buffer.deinit();
         self.index_buffer.deinit();
+        self.uniform_buffer.deinit();
         self.pipeline.deinit();
     }
 };

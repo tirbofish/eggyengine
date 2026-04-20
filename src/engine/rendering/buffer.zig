@@ -1,5 +1,6 @@
 const vk = @import("vulkan");
 const rendering = @import("vulkan.zig");
+const pipeline = @import("pipeline.zig");
 const std = @import("std");
 
 pub const BufferUsageFlags = struct {
@@ -103,7 +104,7 @@ pub fn findMemoryType(e_vulkan: *rendering.EggyVulkanInterface, typeFilter: u32,
     return null;
 }
 
-/// A raw GPU buffer without type information. Use this for low-level buffer operations.
+/// A raw GPU buffer without type information
 pub const RawBuffer = struct {
     e_vulkan: *rendering.EggyVulkanInterface,
     buffer: vk.Buffer,
@@ -367,6 +368,111 @@ pub fn IndexBuffer(comptime T: type) type {
         }
 
         pub fn deinit(self: *@This()) void {
+            self.raw.e_vulkan.await() catch {};
+            self.raw.deinit();
+        }
+    };
+}
+
+/// In the shader-slang, this would be a `ConstantBuffer<T> foo;`
+pub fn UniformBuffer(comptime T: type) type {
+    return struct {
+        raw: RawBuffer,
+        mapped: [*]T,
+
+        descriptor_pool: vk.DescriptorPool,
+        descriptor_sets: [rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT]vk.DescriptorSet,
+
+        /// Create a uniform buffer bound to a pipeline's descriptor set layout.
+        pub fn init(e_vulkan: *rendering.EggyVulkanInterface, p: pipeline.Pipeline) !@This() {
+            const descriptor_set_layout = p.descriptor_set_layout;
+            const size: vk.DeviceSize = @sizeOf(T);
+
+            const raw = try RawBuffer.init(e_vulkan, size, .{ .UniformBuffer = true }, .{
+                .HostVisible = true,
+                .HostCoherent = true,
+            });
+            errdefer raw.deinit();
+
+            const mapped_ptr = try e_vulkan.device.mapMemory(raw.mem, 0, size, .{});
+            const mapped: [*]T = @ptrCast(@alignCast(mapped_ptr));
+
+            const pool_size = vk.DescriptorPoolSize{
+                .descriptor_count = rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT,
+                .type = .uniform_buffer,
+            };
+
+            const pool_info = vk.DescriptorPoolCreateInfo{
+                .flags = .{},
+                .max_sets = rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT,
+                .pool_size_count = 1,
+                .p_pool_sizes = @ptrCast(&pool_size),
+            };
+
+            const descriptor_pool = try e_vulkan.device.createDescriptorPool(&pool_info, null);
+            errdefer e_vulkan.device.destroyDescriptorPool(descriptor_pool, null);
+
+            var layouts: [rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT]vk.DescriptorSetLayout = undefined;
+            for (&layouts) |*layout| {
+                layout.* = descriptor_set_layout;
+            }
+
+            const alloc_info = vk.DescriptorSetAllocateInfo{
+                .descriptor_pool = descriptor_pool,
+                .descriptor_set_count = rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT,
+                .p_set_layouts = &layouts,
+            };
+
+            var descriptor_sets: [rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT]vk.DescriptorSet = undefined;
+            try e_vulkan.device.allocateDescriptorSets(&alloc_info, &descriptor_sets);
+
+            for (0..rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT) |i| {
+                const buffer_info = vk.DescriptorBufferInfo{
+                    .buffer = raw.buffer,
+                    .offset = 0,
+                    .range = @sizeOf(T),
+                };
+
+                const descriptor_write = vk.WriteDescriptorSet{
+                    .dst_set = descriptor_sets[i],
+                    .dst_binding = 0,
+                    .dst_array_element = 0,
+                    .descriptor_count = 1,
+                    .descriptor_type = .uniform_buffer,
+                    .p_buffer_info = @ptrCast(&buffer_info),
+                    .p_image_info = undefined,
+                    .p_texel_buffer_view = undefined,
+                };
+
+                e_vulkan.device.updateDescriptorSets(1, @ptrCast(&descriptor_write), 0, null);
+            }
+
+            return .{
+                .raw = raw,
+                .mapped = mapped,
+                .descriptor_pool = descriptor_pool,
+                .descriptor_sets = descriptor_sets,
+            };
+        }
+
+        /// Write data to the uniform buffer
+        pub fn write(self: *@This(), data: T) void {
+            self.mapped[0] = data;
+        }
+
+        /// Get a pointer to the mapped data for direct modification.
+        pub fn getData(self: *@This()) *T {
+            return &self.mapped[0];
+        }
+
+        /// Get the descriptor set for the current frame.
+        pub fn getDescriptorSet(self: *@This(), frame_index: usize) vk.DescriptorSet {
+            return self.descriptor_sets[frame_index];
+        }
+
+        pub fn deinit(self: *@This()) void {
+            self.raw.e_vulkan.device.destroyDescriptorPool(self.descriptor_pool, null);
+            self.raw.e_vulkan.device.unmapMemory(self.raw.mem);
             self.raw.e_vulkan.await() catch {};
             self.raw.deinit();
         }

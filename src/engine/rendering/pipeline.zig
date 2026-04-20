@@ -178,6 +178,111 @@ pub const BlendConfig = struct {
     };
 };
 
+/// Shader stage flags for descriptor bindings.
+pub const ShaderStage = packed struct {
+    vertex: bool = false,
+    fragment: bool = false,
+    geometry: bool = false,
+    tessellation_control: bool = false,
+    tessellation_evaluation: bool = false,
+    compute: bool = false,
+
+    pub const all_graphics: ShaderStage = .{
+        .vertex = true,
+        .fragment = true,
+        .geometry = true,
+        .tessellation_control = true,
+        .tessellation_evaluation = true,
+    };
+
+    pub fn toVk(self: ShaderStage) vk.ShaderStageFlags {
+        return .{
+            .vertex_bit = self.vertex,
+            .fragment_bit = self.fragment,
+            .geometry_bit = self.geometry,
+            .tessellation_control_bit = self.tessellation_control,
+            .tessellation_evaluation_bit = self.tessellation_evaluation,
+            .compute_bit = self.compute,
+        };
+    }
+};
+
+/// What kind of resource is bound?
+pub const DescriptorType = enum {
+    uniform_buffer,
+    storage_buffer,
+    uniform_buffer_dynamic,
+    storage_buffer_dynamic,
+    combined_image_sampler,
+    sampled_image,
+    storage_image,
+    sampler,
+    input_attachment,
+
+    pub fn toVk(self: DescriptorType) vk.DescriptorType {
+        return switch (self) {
+            .uniform_buffer => .uniform_buffer,
+            .storage_buffer => .storage_buffer,
+            .uniform_buffer_dynamic => .uniform_buffer_dynamic,
+            .storage_buffer_dynamic => .storage_buffer_dynamic,
+            .combined_image_sampler => .combined_image_sampler,
+            .sampled_image => .sampled_image,
+            .storage_image => .storage_image,
+            .sampler => .sampler,
+            .input_attachment => .input_attachment,
+        };
+    }
+};
+
+/// Describes a single binding in a descriptor set layout.
+pub const DescriptorBinding = struct {
+    /// Binding number in the shader (layout(binding = N)).
+    binding: u32,
+    descriptor_type: DescriptorType,
+    count: u32 = 1,
+    stage_flags: ShaderStage,
+
+    /// Create a uniform buffer binding for vertex shader.
+    pub fn uniformBuffer(binding: u32, stages: ShaderStage) DescriptorBinding {
+        return .{
+            .binding = binding,
+            .descriptor_type = .uniform_buffer,
+            .count = 1,
+            .stage_flags = stages,
+        };
+    }
+
+    /// Create a combined image sampler binding.
+    pub fn combinedImageSampler(binding: u32, stages: ShaderStage) DescriptorBinding {
+        return .{
+            .binding = binding,
+            .descriptor_type = .combined_image_sampler,
+            .count = 1,
+            .stage_flags = stages,
+        };
+    }
+
+    /// Create a storage buffer binding.
+    pub fn storageBuffer(binding: u32, stages: ShaderStage) DescriptorBinding {
+        return .{
+            .binding = binding,
+            .descriptor_type = .storage_buffer,
+            .count = 1,
+            .stage_flags = stages,
+        };
+    }
+
+    pub fn toVk(self: DescriptorBinding) vk.DescriptorSetLayoutBinding {
+        return .{
+            .binding = self.binding,
+            .descriptor_type = self.descriptor_type.toVk(),
+            .descriptor_count = self.count,
+            .stage_flags = self.stage_flags.toVk(),
+            .p_immutable_samplers = null,
+        };
+    }
+};
+
 pub const VertexInputRate = enum {
     vertex,
     instance,
@@ -256,11 +361,15 @@ pub const Pipeline = struct {
     vulkan: *rendering.EggyVulkanInterface,
     handle: vk.Pipeline,
     layout: vk.PipelineLayout,
+    descriptor_set_layout: vk.DescriptorSetLayout,
 
     pub fn deinit(self: *Pipeline) void {
         self.vulkan.await() catch {};
         self.vulkan.device.destroyPipeline(self.handle, null);
         self.vulkan.device.destroyPipelineLayout(self.layout, null);
+        if (self.descriptor_set_layout != .null_handle) {
+            self.vulkan.device.destroyDescriptorSetLayout(self.descriptor_set_layout, null);
+        }
     }
 
     /// Start building a new graphics pipeline.
@@ -312,18 +421,23 @@ pub const PipelineBuilder = struct {
     // Color format (defaults to swapchain format)
     color_format_override: ?vk.Format = null,
 
+    // Descriptor set layout bindings
+    descriptor_bindings: std.ArrayList(vk.DescriptorSetLayoutBinding),
+
     pub fn init(vulkan: *rendering.EggyVulkanInterface, allocator: std.mem.Allocator) PipelineBuilder {
         return .{
             .vulkan = vulkan,
             .allocator = allocator,
             .binding_descriptions = std.ArrayList(vk.VertexInputBindingDescription).empty,
             .attribute_descriptions = std.ArrayList(vk.VertexInputAttributeDescription).empty,
+            .descriptor_bindings = std.ArrayList(vk.DescriptorSetLayoutBinding).empty,
         };
     }
 
     pub fn deinit(self: *PipelineBuilder) void {
         self.binding_descriptions.deinit(self.allocator);
         self.attribute_descriptions.deinit(self.allocator);
+        self.descriptor_bindings.deinit(self.allocator);
     }
 
     /// Set the vertex shader module and entry point.
@@ -410,6 +524,20 @@ pub const PipelineBuilder = struct {
     /// Override the color attachment format (defaults to swapchain format)
     pub fn colorFormat(self: *PipelineBuilder, format: vk.Format) *PipelineBuilder {
         self.color_format_override = format;
+        return self;
+    }
+
+    /// Add a descriptor binding to the pipeline's descriptor set layout.
+    pub fn addDescriptorBinding(self: *PipelineBuilder, binding: DescriptorBinding) *PipelineBuilder {
+        self.descriptor_bindings.append(self.allocator, binding.toVk()) catch {};
+        return self;
+    }
+
+    /// Add multiple descriptor bindings at once.
+    pub fn addDescriptorBindings(self: *PipelineBuilder, bindings: []const DescriptorBinding) *PipelineBuilder {
+        for (bindings) |binding| {
+            self.descriptor_bindings.append(self.allocator, binding.toVk()) catch {};
+        }
         return self;
     }
 
@@ -513,8 +641,21 @@ pub const PipelineBuilder = struct {
             .p_dynamic_states = &dynamic_states_buf,
         };
 
+        var descriptor_set_layout: vk.DescriptorSetLayout = .null_handle;
+        if (self.descriptor_bindings.items.len > 0) {
+            const descriptor_layout_info = vk.DescriptorSetLayoutCreateInfo{
+                .binding_count = @intCast(self.descriptor_bindings.items.len),
+                .p_bindings = self.descriptor_bindings.items.ptr,
+            };
+            descriptor_set_layout = try self.vulkan.device.createDescriptorSetLayout(&descriptor_layout_info, null);
+        }
+        errdefer if (descriptor_set_layout != .null_handle) {
+            self.vulkan.device.destroyDescriptorSetLayout(descriptor_set_layout, null);
+        };
+
         const layout_info = vk.PipelineLayoutCreateInfo{
-            .set_layout_count = 0,
+            .set_layout_count = if (descriptor_set_layout != .null_handle) 1 else 0,
+            .p_set_layouts = if (descriptor_set_layout != .null_handle) @ptrCast(&descriptor_set_layout) else null,
             .push_constant_range_count = 0,
         };
         const layout = try self.vulkan.device.createPipelineLayout(&layout_info, null);
@@ -560,6 +701,7 @@ pub const PipelineBuilder = struct {
             .vulkan = self.vulkan,
             .handle = handle,
             .layout = layout,
+            .descriptor_set_layout = descriptor_set_layout,
         };
     }
 };
