@@ -24,7 +24,7 @@ fn escape_to_quit(ctx: *eggy.Context) !void {
 
 pub const Vertex = struct {
     position: eggy.math.Vec2,
-    colour: eggy.math.Vec3,
+    colour: eggy.colour.Colour,
 
     pub fn getBindingDescription() pipeline.VertexBinding {
         return .{
@@ -53,14 +53,33 @@ pub const Vertex = struct {
 };
 
 pub const VKModule = struct {
-    const vertices = [3]Vertex{
-        .{ .position = .{ .x = 0.0, .y = -0.5 }, .colour = .{ .x = 1.0, .y = 0.0, .z = 0.0 } },
-        .{ .position = .{ .x = 0.5, .y = 0.5 }, .colour = .{ .x = 0.0, .y = 1.0, .z = 0.0 } },
-        .{ .position = .{ .x = -0.5, .y = 0.5 }, .colour = .{ .x = 0.0, .y = 0.0, .z = 1.0 } },
+    const vertices = [_]Vertex {
+        .{
+            .position = eggy.math.Vec2.init(-0.5, -0.5),
+            .colour = eggy.colour.Colour.from_f32(1.0, 0.0, 0.0)
+        },
+        .{
+            .position = eggy.math.Vec2.init(0.5, -0.5),
+            .colour = eggy.colour.Colour.from_f32(0.0, 1.0, 0.0)
+        },
+        .{
+            .position = eggy.math.Vec2.init(0.5, 0.5),
+            .colour = eggy.colour.Colour.from_f32(0.0, 0.0, 1.0)
+        },
+        .{
+            .position = eggy.math.Vec2.init(-0.5, 0.5),
+            .colour = eggy.colour.Colour.from_f32(1.0, 1.0, 1.0)
+        },
+    };
+    const indices = [_]u16 {
+        0, 1, 2,
+        2, 3, 0
     };
     
     pipeline: pipeline.Pipeline = undefined,
-    vertex_buffer: rendering.buffer.Buffer(Vertex) = undefined,
+
+    vertex_buffer: rendering.buffer.VertexBuffer(Vertex) = undefined,
+    index_buffer: rendering.buffer.IndexBuffer(u16) = undefined,
 
     pub const schedules = .{
         .init = .{init},
@@ -90,10 +109,8 @@ pub const VKModule = struct {
             .addVertexAttributes(&Vertex.getAttributeDescriptions())
             .build();
         
-        self.vertex_buffer = try rendering.buffer.Buffer(Vertex).init(vulkan, &vertices, .{
-            .VertexBuffer = true
-        });
-        try self.vertex_buffer.flush();
+        self.vertex_buffer = try rendering.buffer.VertexBuffer(Vertex).init(vulkan, &vertices);
+        self.index_buffer = try rendering.buffer.IndexBuffer(u16).init(vulkan, &indices);
     }
 
     pub fn render(self: *@This(), ctx: *eggy.Context) !void {
@@ -128,7 +145,8 @@ pub const VKModule = struct {
 
             pass.setPipeline(self.pipeline);
             pass.setVertexBuffer(self.vertex_buffer);
-            pass.draw(vertices.len, 1, 0, 0);
+            pass.setIndexBuffer(self.index_buffer, .uint16);
+            pass.drawIndexed(indices.len, 1, 0, 0, 0);
         }
 
         const submit_result = try frame.submit();
@@ -139,6 +157,7 @@ pub const VKModule = struct {
 
     pub fn deinit(self: *@This(), _: *eggy.Context) void {
         self.vertex_buffer.deinit();
+        self.index_buffer.deinit();
         self.pipeline.deinit();
     }
 };

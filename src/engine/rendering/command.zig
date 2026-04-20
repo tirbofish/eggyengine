@@ -66,10 +66,17 @@ pub const RenderPass = struct {
         self.frame.vulkan.device.cmdBindPipeline(self.frame.cmd, .graphics, p.handle);
     }
 
-    /// Bind a vertex buffer.
+    /// Bind a vertex buffer. Accepts both RawBuffer and Buffer(T).
     pub fn setVertexBuffer(self: *RenderPass, buf: anytype) void {
         const offsets = [_]vk.DeviceSize{0};
-        self.frame.vulkan.device.cmdBindVertexBuffers(self.frame.cmd, 0, 1, @ptrCast(&buf.buffer), &offsets);
+        const vk_buffer = if (@hasField(@TypeOf(buf), "raw")) buf.raw.buffer else buf.buffer; // a buffer must contain a `raw` name with the type `RawBuffer`
+        self.frame.vulkan.device.cmdBindVertexBuffers(self.frame.cmd, 0, 1, @ptrCast(&vk_buffer), &offsets);
+    }
+
+    /// Bind an index buffer. Accepts IndexBuffer(T) or RawBuffer.
+    pub fn setIndexBuffer(self: *RenderPass, buf: anytype, index_type: vk.IndexType) void {
+        const vk_buffer = if (@hasField(@TypeOf(buf), "raw")) buf.raw.buffer else buf.buffer;
+        self.frame.vulkan.device.cmdBindIndexBuffer(self.frame.cmd, vk_buffer, 0, index_type);
     }
 
     /// Draw vertices directly.

@@ -66,48 +66,194 @@ pub const BufferUsageFlags = struct {
     }
 };
 
-/// A block of memory allocated to the GPU, with support for dirty-state checking. 
+pub const MemoryPropertyFlags = struct {
+    DeviceLocal: bool = false,
+    HostVisible: bool = false,
+    HostCoherent: bool = false,
+    HostCached: bool = false,
+    LazilyAllocated: bool = false,
+    Protected: bool = false,
+    DeviceCoherent: bool = false,
+    DeviceUncached: bool = false,
+
+    pub fn toVk(self: MemoryPropertyFlags) vk.MemoryPropertyFlags {
+        return .{
+            .device_local_bit = self.DeviceLocal,
+            .host_visible_bit = self.HostVisible,
+            .host_coherent_bit = self.HostCoherent,
+            .host_cached_bit = self.HostCached,
+            .lazily_allocated_bit = self.LazilyAllocated,
+            .protected_bit = self.Protected,
+            .device_coherent_bit_amd = self.DeviceCoherent,
+            .device_uncached_bit_amd = self.DeviceUncached,
+        };
+    }
+};
+
+/// Find a suitable memory type index for the given requirements.
+pub fn findMemoryType(e_vulkan: *rendering.EggyVulkanInterface, typeFilter: u32, properties: vk.MemoryPropertyFlags) ?u32 {
+    const memProps = e_vulkan.instance.getPhysicalDeviceMemoryProperties(e_vulkan.pdev);
+    for (0..memProps.memory_type_count) |i| {
+        if ((typeFilter & (@as(u32, 1) << @intCast(i))) != 0 and
+            memProps.memory_types[i].property_flags.contains(properties))
+        {
+            return @intCast(i);
+        }
+    }
+    return null;
+}
+
+/// A raw GPU buffer without type information. Use this for low-level buffer operations.
+pub const RawBuffer = struct {
+    e_vulkan: *rendering.EggyVulkanInterface,
+    buffer: vk.Buffer,
+    mem: vk.DeviceMemory,
+    size: vk.DeviceSize,
+
+    /// Create a raw buffer with the specified size, usage, and memory properties.
+    pub fn init(
+        e_vulkan: *rendering.EggyVulkanInterface,
+        size: vk.DeviceSize,
+        usage: BufferUsageFlags,
+        mem_properties: MemoryPropertyFlags,
+    ) !RawBuffer {
+        const buffer_info = vk.BufferCreateInfo{
+            .size = size,
+            .usage = usage.toVk(),
+            .sharing_mode = .exclusive,
+        };
+
+        const buffer = try e_vulkan.device.createBuffer(&buffer_info, null);
+        errdefer e_vulkan.device.destroyBuffer(buffer, null);
+
+        const memRequirements = e_vulkan.device.getBufferMemoryRequirements(buffer);
+
+        const memAllocInfo = vk.MemoryAllocateInfo{
+            .allocation_size = memRequirements.size,
+            .memory_type_index = findMemoryType(e_vulkan, memRequirements.memory_type_bits, mem_properties.toVk()) orelse return error.NoSuitableMemoryType,
+        };
+
+        const mem = try e_vulkan.device.allocateMemory(&memAllocInfo, null);
+        errdefer e_vulkan.device.freeMemory(mem, null);
+
+        try e_vulkan.device.bindBufferMemory(buffer, mem, 0);
+
+        return RawBuffer{
+            .e_vulkan = e_vulkan,
+            .buffer = buffer,
+            .mem = mem,
+            .size = size,
+        };
+    }
+
+    /// Map the buffer memory and return a pointer to it.
+    pub fn map(self: *RawBuffer) !?*anyopaque {
+        return try self.e_vulkan.device.mapMemory(self.mem, 0, self.size, .{});
+    }
+
+    /// Unmap the buffer memory.
+    pub fn unmap(self: *RawBuffer) void {
+        self.e_vulkan.device.unmapMemory(self.mem);
+    }
+
+    /// Copy data to the buffer. The buffer must be host-visible.
+    pub fn copyFromSlice(self: *RawBuffer, comptime T: type, data: []const T) !void {
+        const mapped = try self.map();
+        if (mapped) |ptr| {
+            const dest: [*]T = @ptrCast(@alignCast(ptr));
+            @memcpy(dest[0..data.len], data);
+        }
+        self.unmap();
+    }
+
+    pub fn deinit(self: RawBuffer) void {
+        self.e_vulkan.device.freeMemory(self.mem, null);
+        self.e_vulkan.device.destroyBuffer(self.buffer, null);
+    }
+};
+
+
+pub fn copyBuffer(e_vulkan: *rendering.EggyVulkanInterface, src: vk.Buffer, dst: vk.Buffer, size: vk.DeviceSize) !void {
+    var cmd_buf: vk.CommandBuffer = undefined;
+    try e_vulkan.device.allocateCommandBuffers(&.{
+        .command_pool = e_vulkan.command_pool,
+        .level = .primary,
+        .command_buffer_count = 1,
+    }, @ptrCast(&cmd_buf));
+    defer e_vulkan.device.freeCommandBuffers(e_vulkan.command_pool, 1, @ptrCast(&cmd_buf));
+
+    try e_vulkan.device.beginCommandBuffer(cmd_buf, &.{
+        .flags = .{ .one_time_submit_bit = true },
+    });
+
+    const copy_region = vk.BufferCopy{
+        .src_offset = 0,
+        .dst_offset = 0,
+        .size = size,
+    };
+    e_vulkan.device.cmdCopyBuffer(cmd_buf, src, dst, 1, @ptrCast(&copy_region));
+
+    try e_vulkan.device.endCommandBuffer(cmd_buf);
+
+    const submit_info = vk.SubmitInfo{
+        .command_buffer_count = 1,
+        .p_command_buffers = @ptrCast(&cmd_buf),
+    };
+    try e_vulkan.device.queueSubmit(e_vulkan.queue.inner, 1, @ptrCast(&submit_info), .null_handle);
+    try e_vulkan.device.queueWaitIdle(e_vulkan.queue.inner);
+}
+
+pub fn createBuffer(
+    e_vulkan: *rendering.EggyVulkanInterface,
+    size: vk.DeviceSize,
+    usage: BufferUsageFlags,
+    mem_properties: MemoryPropertyFlags,
+) !struct { buffer: vk.Buffer, mem: vk.DeviceMemory } {
+    const raw = try RawBuffer.init(e_vulkan, size, usage, mem_properties);
+    return .{ .buffer = raw.buffer, .mem = raw.mem };
+}
+
+/// A typed block of memory allocated to the GPU, with support for dirty-state checking. 
 pub fn Buffer(comptime T: type) type {
     return struct {
-        e_vulkan: *rendering.EggyVulkanInterface,
-        buffer: vk.Buffer,
-        mem: vk.DeviceMemory,
+        raw: RawBuffer,
         data: []const T,
-        size: vk.DeviceSize,
         dirty: bool,
 
         /// Initialises a new `Buffer` with the data of a specific type. 
         /// 
         /// Make sure to flush it straight after with `Buffer.flush()`, otherwise you will not see anything.
         pub fn init(e_vulkan: *rendering.EggyVulkanInterface, data: []const T, usage: BufferUsageFlags) !@This() {
-            var self: @This() = undefined;
-            self.size = @sizeOf(T) * data.len;
-            self.data = data;
-            self.dirty = true;
+            const size: vk.DeviceSize = @sizeOf(T) * data.len;
 
-            const buffer_info = vk.BufferCreateInfo{
-                .size = self.size,
-                .usage = usage.toVk(),
-                .sharing_mode = .exclusive,
+            const raw = try RawBuffer.init(e_vulkan, size, usage, .{
+                .HostVisible = true,
+                .HostCoherent = true,
+            });
+
+            return @This(){
+                .raw = raw,
+                .data = data,
+                .dirty = true,
             };
+        }
 
-            self.buffer = try e_vulkan.device.createBuffer(&buffer_info, null);
-            self.e_vulkan = e_vulkan;
+        /// Initialises a new `Buffer` with custom memory properties.
+        pub fn initWithMemoryProperties(
+            e_vulkan: *rendering.EggyVulkanInterface,
+            data: []const T,
+            usage: BufferUsageFlags,
+            mem_properties: MemoryPropertyFlags,
+        ) !@This() {
+            const size: vk.DeviceSize = @sizeOf(T) * data.len;
 
-            const memRequirements = e_vulkan.device.getBufferMemoryRequirements(self.buffer);
+            const raw = try RawBuffer.init(e_vulkan, size, usage, mem_properties);
 
-            const memAllocInfo = vk.MemoryAllocateInfo{
-                .allocation_size = memRequirements.size,
-                .memory_type_index = findMemoryType(&self, memRequirements.memory_type_bits, .{
-                    .host_visible_bit = true,
-                    .host_coherent_bit = true,
-                }) orelse return error.NoSuitableMemoryType,
+            return @This(){
+                .raw = raw,
+                .data = data,
+                .dirty = true,
             };
-
-            self.mem = try e_vulkan.device.allocateMemory(&memAllocInfo, null);
-            try e_vulkan.device.bindBufferMemory(self.buffer, self.mem, 0);
-
-            return self;
         }
 
         /// Marks the buffer as dirty, so the next flush() will write data to GPU memory.
@@ -126,12 +272,12 @@ pub fn Buffer(comptime T: type) type {
         pub fn flush(self: *@This()) !void {
             if (!self.dirty) return;
 
-            const mapped = try self.e_vulkan.device.mapMemory(self.mem, 0, self.size, .{});
+            const mapped = try self.raw.map();
             if (mapped) |ptr| {
                 const dest: [*]T = @ptrCast(@alignCast(ptr));
                 @memcpy(dest[0..self.data.len], self.data);
             }
-            self.e_vulkan.device.unmapMemory(self.mem);
+            self.raw.unmap();
             self.dirty = false;
         }
 
@@ -142,20 +288,87 @@ pub fn Buffer(comptime T: type) type {
         }
 
         pub fn deinit(self: *@This()) void {
-            self.e_vulkan.await() catch {};
-            self.e_vulkan.device.freeMemory(self.mem, null);
-            self.e_vulkan.device.destroyBuffer(self.buffer, null);
+            self.raw.e_vulkan.await() catch {};
+            self.raw.deinit();
+        }
+    };
+}
+
+pub fn VertexBuffer(comptime T: type) type {
+    return struct {
+        raw: RawBuffer,
+        len: usize,
+
+        pub fn init(e_vulkan: *rendering.EggyVulkanInterface, data: []const T) !@This() {
+            const size: vk.DeviceSize = @sizeOf(T) * data.len;
+
+            var staging = try RawBuffer.init(e_vulkan, size, .{ .TransferSrc = true }, .{
+                .HostVisible = true,
+                .HostCoherent = true,
+            });
+            defer staging.deinit();
+
+            try staging.copyFromSlice(T, data);
+
+            var raw = try RawBuffer.init(e_vulkan, size, .{
+                .VertexBuffer = true,
+                .TransferDst = true,
+            }, .{
+                .DeviceLocal = true,
+            });
+            errdefer raw.deinit();
+
+            try copyBuffer(e_vulkan, staging.buffer, raw.buffer, size);
+
+            return @This(){
+                .raw = raw,
+                .len = data.len,
+            };
         }
 
-        fn findMemoryType(self: *@This(), typeFilter: u32, properties: vk.MemoryPropertyFlags) ?u32 {
-            const memProps = self.e_vulkan.instance.getPhysicalDeviceMemoryProperties(self.e_vulkan.pdev);
-            for (0..memProps.memory_type_count) |i| {
-                if ((typeFilter & (@as(u32, 1) << @intCast(i))) != 0 and
-                    memProps.memory_types[i].property_flags.contains(properties)) {
-                    return @intCast(i);
-                }
-            }
-            return null;
+        pub fn deinit(self: *@This()) void {
+            self.raw.e_vulkan.await() catch {};
+            self.raw.deinit();
+        }
+    };
+}
+
+pub fn IndexBuffer(comptime T: type) type {
+    return struct {
+        raw: RawBuffer,
+        len: usize,
+
+        /// T should be u16 or u32.
+        pub fn init(e_vulkan: *rendering.EggyVulkanInterface, data: []const T) !@This() {
+            const size: vk.DeviceSize = @sizeOf(T) * data.len;
+
+            var staging = try RawBuffer.init(e_vulkan, size, .{ .TransferSrc = true }, .{
+                .HostVisible = true,
+                .HostCoherent = true,
+            });
+            defer staging.deinit();
+
+            try staging.copyFromSlice(T, data);
+
+            const raw = try RawBuffer.init(e_vulkan, size, .{
+                .IndexBuffer = true,
+                .TransferDst = true,
+            }, .{
+                .DeviceLocal = true,
+            });
+            errdefer raw.deinit();
+
+            try copyBuffer(e_vulkan, staging.buffer, raw.buffer, size);
+
+            return @This(){
+                .raw = raw,
+                .len = data.len,
+            };
+        }
+
+        pub fn deinit(self: *@This()) void {
+            self.raw.e_vulkan.await() catch {};
+            self.raw.deinit();
         }
     };
 }
