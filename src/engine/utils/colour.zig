@@ -103,4 +103,5 @@ pub const Colour = struct {
     pub const black = Colour{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
     pub const white = Colour{ .r = 1.0, .g = 1.0, .b = 1.0, .a = 1.0 };
     pub const cornflower_blue = Colour{ .r = 0.392, .g = 0.584, .b = 0.929, .a = 1.0 };
+    pub const transparent = Colour {.r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0};
 };

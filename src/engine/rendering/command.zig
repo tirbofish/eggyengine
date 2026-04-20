@@ -1,5 +1,6 @@
 const rendering = @import("vulkan.zig");
 const pipeline = @import("pipeline.zig");
+const buffer = @import("buffer.zig");
 const vk = @import("vulkan");
 const colour = @import("../utils/colour.zig");
 const std = @import("std");
@@ -7,6 +8,118 @@ const std = @import("std");
 pub fn colourToVk(self: colour.Colour) vk.ClearValue {
     return .{ .color = .{ .float_32 = .{ self.r, self.g, self.b, self.a } } };
 }
+
+/// Load operation for attachments.
+pub const LoadOp = enum {
+    clear,
+    load,
+    dont_care,
+
+    fn toVk(self: LoadOp) vk.AttachmentLoadOp {
+        return switch (self) {
+            .clear => .clear,
+            .load => .load,
+            .dont_care => .dont_care,
+        };
+    }
+};
+
+/// Store operation for attachments.
+pub const StoreOp = enum {
+    store,
+    dont_care,
+
+    fn toVk(self: StoreOp) vk.AttachmentStoreOp {
+        return switch (self) {
+            .store => .store,
+            .dont_care => .dont_care,
+        };
+    }
+};
+
+/// Color attachment configuration for a render pass.
+pub const ColorAttachment = struct {
+    clear_color: colour.Colour = colour.Colour.black,
+    load_op: LoadOp = .clear,
+    store_op: StoreOp = .store,
+};
+
+/// Descriptor for configuring a render pass.
+pub const RenderPassDescriptor = struct {
+    color_attachment: ColorAttachment = .{},
+};
+
+/// A scoped render pass that automatically handles Vulkan rendering state.
+/// Use with defer to ensure proper cleanup:
+/// ```
+/// var pass = frame.beginRenderPass(.{ .color_attachment = .{ .clear_color = colour.red } });
+/// defer pass.end();
+/// pass.setPipeline(my_pipeline);
+/// pass.draw(3, 1, 0, 0);
+/// ```
+pub const RenderPass = struct {
+    frame: *Frame,
+    ended: bool = false,
+
+    /// Bind a graphics pipeline.
+    pub fn setPipeline(self: *RenderPass, p: pipeline.Pipeline) void {
+        self.frame.vulkan.device.cmdBindPipeline(self.frame.cmd, .graphics, p.handle);
+    }
+
+    /// Bind a vertex buffer.
+    pub fn setVertexBuffer(self: *RenderPass, buf: anytype) void {
+        const offsets = [_]vk.DeviceSize{0};
+        self.frame.vulkan.device.cmdBindVertexBuffers(self.frame.cmd, 0, 1, @ptrCast(&buf.buffer), &offsets);
+    }
+
+    /// Draw vertices directly.
+    pub fn draw(self: *RenderPass, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) void {
+        self.frame.vulkan.device.cmdDraw(self.frame.cmd, vertex_count, instance_count, first_vertex, first_instance);
+    }
+
+    /// Draw indexed vertices.
+    pub fn drawIndexed(self: *RenderPass, index_count: u32, instance_count: u32, first_index: u32, vertex_offset: i32, first_instance: u32) void {
+        self.frame.vulkan.device.cmdDrawIndexed(self.frame.cmd, index_count, instance_count, first_index, vertex_offset, first_instance);
+    }
+
+    /// Set a custom viewport.
+    pub fn setViewport(self: *RenderPass, x: f32, y: f32, width: f32, height: f32) void {
+        const viewport = vk.Viewport{
+            .x = x,
+            .y = y,
+            .width = width,
+            .height = height,
+            .min_depth = 0.0,
+            .max_depth = 1.0,
+        };
+        self.frame.vulkan.device.cmdSetViewport(self.frame.cmd, 0, 1, @ptrCast(&viewport));
+    }
+
+    /// Set a custom scissor rectangle.
+    pub fn setScissor(self: *RenderPass, x: i32, y: i32, width: u32, height: u32) void {
+        const scissor = vk.Rect2D{
+            .offset = .{ .x = x, .y = y },
+            .extent = .{ .width = width, .height = height },
+        };
+        self.frame.vulkan.device.cmdSetScissor(self.frame.cmd, 0, 1, @ptrCast(&scissor));
+    }
+
+    /// End the render pass. Called automatically if using defer.
+    pub fn end(self: *RenderPass) void {
+        if (self.ended) return;
+        self.ended = true;
+
+        self.frame.vulkan.device.cmdEndRendering(self.frame.cmd);
+        self.frame.transitionImageLayout(
+            .color_attachment_optimal,
+            .present_src_khr,
+            .{ .color_attachment_write_bit = true },
+            .{},
+            .{ .color_attachment_output_bit = true },
+            .{ .bottom_of_pipe_bit = true },
+        );
+    }
+};
 
 pub const Frame = struct {
     pub const AcquireError = error{
@@ -163,6 +276,54 @@ pub const Frame = struct {
         self.vulkan.device.cmdBeginRendering(self.cmd, &rendering_info);
         self.setFullViewport();
         self.setFullScissor();
+    }
+
+    /// Begin a scoped render pass. Use with defer for automatic cleanup:
+    /// ```
+    /// var pass = frame.beginRenderPass(.{ .color_attachment = .{ .clear_color = colour.red } });
+    /// defer pass.end();
+    /// pass.setPipeline(my_pipeline);
+    /// pass.draw(3, 1, 0, 0);
+    /// ```
+    pub fn beginRenderPass(self: *Frame, desc: RenderPassDescriptor) RenderPass {
+        self.transitionImageLayout(
+            .undefined,
+            .color_attachment_optimal,
+            .{},
+            .{ .color_attachment_write_bit = true },
+            .{ .color_attachment_output_bit = true },
+            .{ .color_attachment_output_bit = true },
+        );
+
+        const attachment_info = vk.RenderingAttachmentInfo{
+            .image_view = self.vulkan.swapchain.image_views.items[self.image_index],
+            .image_layout = .color_attachment_optimal,
+            .resolve_mode = .{},
+            .resolve_image_view = .null_handle,
+            .resolve_image_layout = .undefined,
+            .load_op = desc.color_attachment.load_op.toVk(),
+            .store_op = desc.color_attachment.store_op.toVk(),
+            .clear_value = colourToVk(desc.color_attachment.clear_color),
+        };
+
+        const rendering_info = vk.RenderingInfo{
+            .render_area = .{
+                .offset = .{ .x = 0, .y = 0 },
+                .extent = self.vulkan.swapchain.swapchain_extent,
+            },
+            .layer_count = 1,
+            .view_mask = 0,
+            .color_attachment_count = 1,
+            .p_color_attachments = @ptrCast(&attachment_info),
+        };
+
+        self.vulkan.device.cmdBeginRendering(self.cmd, &rendering_info);
+        self.setFullViewport();
+        self.setFullScissor();
+
+        return RenderPass{
+            .frame = self,
+        };
     }
 
     /// End rendering and transition image for presentation.

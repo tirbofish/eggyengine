@@ -2,6 +2,7 @@ pub const vk = @import("vulkan");
 pub const pipeline = @import("pipeline.zig");
 pub const cmd = @import("command.zig");
 pub const swapchain = @import("swapchain.zig");
+pub const buffer = @import("buffer.zig");
 
 const sdl = @import("sdl3");
 const builtin = @import("builtin");

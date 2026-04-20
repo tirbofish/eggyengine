@@ -1,9 +1,9 @@
 const std = @import("std");
 const eggy = @import("eggy");
-const vk = eggy.module.rendering.vulkan.vk;
 
-const pipeline = eggy.module.rendering.vulkan.pipeline;
-const cmd = eggy.module.rendering.vulkan.cmd;
+const rendering = eggy.module.rendering.vulkan;
+const pipeline = rendering.pipeline;
+const cmd = rendering.cmd;
 
 pub fn main() !void {
     var app = try eggy.EggyApp(&.{ eggy.module.DefaultModule(.{}, eggy.module.rendering.vulkan.EggyVulkanInterface), struct {
@@ -53,7 +53,14 @@ pub const Vertex = struct {
 };
 
 pub const VKModule = struct {
+    const vertices = [3]Vertex{
+        .{ .position = .{ .x = 0.0, .y = -0.5 }, .colour = .{ .x = 1.0, .y = 0.0, .z = 0.0 } },
+        .{ .position = .{ .x = 0.5, .y = 0.5 }, .colour = .{ .x = 0.0, .y = 1.0, .z = 0.0 } },
+        .{ .position = .{ .x = -0.5, .y = 0.5 }, .colour = .{ .x = 0.0, .y = 0.0, .z = 1.0 } },
+    };
+    
     pipeline: pipeline.Pipeline = undefined,
+    vertex_buffer: rendering.buffer.Buffer(Vertex) = undefined,
 
     pub const schedules = .{
         .init = .{init},
@@ -63,13 +70,6 @@ pub const VKModule = struct {
 
     pub fn init(self: *@This(), ctx: *eggy.Context) !void {
         const vulkan = ctx.world.getResource(eggy.module.rendering.vulkan.EggyVulkanInterface) orelse return;
-
-        const vertices = [3]Vertex{
-            .{ .position = .{ .x = 0.0, .y = -0.5 }, .colour = .{ .x = 1.0, .y = 0.0, .z = 0.0 } },
-            .{ .position = .{ .x = 0.5, .y = 0.5 }, .colour = .{ .x = 0.0, .y = 1.0, .z = 0.0 } },
-            .{ .position = .{ .x = -0.5, .y = 0.5 }, .colour = .{ .x = 0.0, .y = 0.0, .z = 1.0 } },
-        };
-        _ = vertices;
 
         const shader_file = try std.fs.cwd().openFile("zig-out/bin/shaders/shader.spv", .{});
         defer shader_file.close();
@@ -89,6 +89,11 @@ pub const VKModule = struct {
             .addVertexBinding(Vertex.getBindingDescription())
             .addVertexAttributes(&Vertex.getAttributeDescriptions())
             .build();
+        
+        self.vertex_buffer = try rendering.buffer.Buffer(Vertex).init(vulkan, &vertices, .{
+            .VertexBuffer = true
+        });
+        try self.vertex_buffer.flush();
     }
 
     pub fn render(self: *@This(), ctx: *eggy.Context) !void {
@@ -111,10 +116,20 @@ pub const VKModule = struct {
             },
         };
 
-        frame.beginRendering(.cornflower_blue);
-        frame.bindPipeline(self.pipeline);
-        frame.draw(3, 1, 0, 0);
-        frame.endRendering();
+        {
+            var pass = frame.beginRenderPass(.{
+                .color_attachment = .{
+                    .clear_color = eggy.colour.Colour.transparent,
+                    .load_op = .clear,
+                    .store_op = .store,
+                },
+            });
+            defer pass.end();
+
+            pass.setPipeline(self.pipeline);
+            pass.setVertexBuffer(self.vertex_buffer);
+            pass.draw(vertices.len, 1, 0, 0);
+        }
 
         const submit_result = try frame.submit();
         if (submit_result == .swapchain_out_of_date or submit_result == .swapchain_suboptimal) {
@@ -123,6 +138,7 @@ pub const VKModule = struct {
     }
 
     pub fn deinit(self: *@This(), _: *eggy.Context) void {
+        self.vertex_buffer.deinit();
         self.pipeline.deinit();
     }
 };
