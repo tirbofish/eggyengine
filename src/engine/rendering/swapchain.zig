@@ -16,6 +16,7 @@ pub const Swapchain = struct {
     swapchain_extent: vk.Extent2D,
     image_views: std.ArrayList(vk.ImageView),
 
+    /// Recreates the existing swapchain
     pub fn recreate(self: *@This(), e_vulkan: *vulkan.EggyVulkanInterface) !void {
         var size = e_vulkan.window.getSize() catch .{ 0, 0 };
         while (size[0] == 0 or size[1] == 0) {

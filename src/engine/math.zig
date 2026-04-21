@@ -1,4 +1,11 @@
 //! eggy math types
+//! 
+//! includes:
+//! - vector (2, 3, 4)
+//! - matrix (2x2, 3x3, 4x4, axb)
+//! - quaternion
+//! 
+//! for primarily `f32` but with support for `f64`, and backed by SIMD `@Vector` types
 
 const std = @import("std");
 
@@ -104,4 +111,20 @@ pub fn lookAt(eye: Vec3, target: Vec3, up: Vec3) Mat4 {
 /// Create a perspective projection matrix using f32.
 pub fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) Mat4 {
     return perspective4x4(f32, fov_y, aspect, near, far);
+}
+
+// --------------- padding ---------------
+
+/// Allows you to create a padding of `type` `count` amount of times. Typically used to ensure alignment in a struct. 
+/// 
+/// Initialise with `Padding(...).default`
+pub fn Padding(comptime T: type, comptime count: usize) type {
+    return struct {
+        data: [count]T = [_]T{0} ** count,
+
+        /// The default initialiser. 
+        /// 
+        /// Since this padding likely won't be used at all, its best to set it equal to `.default` and forget about it. 
+        pub const default: @This() = .{};
+    };
 }

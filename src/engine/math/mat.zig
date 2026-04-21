@@ -40,7 +40,7 @@ fn assertPermittedType(comptime T: type) void {
     }
 }
 
-/// A generic MxN matrix type, specifically column-major order for compatability with the GPU (specifically vulkan)
+/// A generic MxN matrix type, specifically column-major order for compatability with the GPU (specifically vulkan). 
 /// T must be a permitted numeric type (validated at comptime).
 pub fn Matrix(comptime T: type, comptime rows: usize, comptime cols: usize) type {
     comptime assertPermittedType(T);
@@ -71,6 +71,8 @@ pub fn zero(comptime T: type, comptime rows: usize, comptime cols: usize) Matrix
 }
 
 /// Create an identity matrix (requires square matrix).
+/// 
+/// The size is provided by `row:column = size:size`
 pub fn identity(comptime T: type, comptime size: usize) Matrix(T, size, size) {
     var result = zero(T, size, size);
     for (0..size) |i| {

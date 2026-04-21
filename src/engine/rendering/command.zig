@@ -1,13 +1,43 @@
 const rendering = @import("vulkan.zig");
 const pipeline = @import("pipeline.zig");
 const buffer = @import("buffer.zig");
+const texture = @import("texture.zig");
 const vk = @import("vulkan");
 const colour = @import("../utils/colour.zig");
 const std = @import("std");
 
-pub fn colourToVk(self: colour.Colour) vk.ClearValue {
-    return .{ .color = .{ .float_32 = .{ self.r, self.g, self.b, self.a } } };
-}
+
+/// Image layout states.
+pub const ImageLayout = enum {
+    undefined,
+    transfer_dst_optimal,
+    shader_read_only_optimal,
+    color_attachment_optimal,
+    present_src,
+
+    fn toVk(self: ImageLayout) vk.ImageLayout {
+        return switch (self) {
+            .undefined => .undefined,
+            .transfer_dst_optimal => .transfer_dst_optimal,
+            .shader_read_only_optimal => .shader_read_only_optimal,
+            .color_attachment_optimal => .color_attachment_optimal,
+            .present_src => .present_src_khr,
+        };
+    }
+};
+
+/// Index element types.
+pub const IndexType = enum {
+    uint16,
+    uint32,
+
+    fn toVk(self: IndexType) vk.IndexType {
+        return switch (self) {
+            .uint16 => .uint16,
+            .uint32 => .uint32,
+        };
+    }
+};
 
 /// Load operation for attachments.
 pub const LoadOp = enum {
@@ -37,77 +67,187 @@ pub const StoreOp = enum {
     }
 };
 
-/// Color attachment configuration for a render pass.
+/// Color attachment configuration for rendering.
 pub const ColorAttachment = struct {
     clear_color: colour.Colour = colour.Colour.black,
     load_op: LoadOp = .clear,
     store_op: StoreOp = .store,
 };
 
-/// Descriptor for configuring a render pass.
-pub const RenderPassDescriptor = struct {
+/// Configuration for beginRendering.
+pub const RenderingInfo = struct {
     color_attachment: ColorAttachment = .{},
 };
 
-/// A scoped render pass that automatically handles Vulkan rendering state.
-/// Use with defer to ensure proper cleanup:
-/// ```
-/// var pass = frame.beginRenderPass(.{ .color_attachment = .{ .clear_color = colour.red } });
-/// defer pass.end();
-/// pass.setPipeline(my_pipeline);
-/// pass.draw(3, 1, 0, 0);
-/// ```
-pub const RenderPass = struct {
-    frame: *Frame,
-    ended: bool = false,
+/// Extent (width, height).
+pub const Extent2D = struct {
+    width: u32,
+    height: u32,
+};
+
+fn colourToVk(c: colour.Colour) vk.ClearValue {
+    return .{ .color = .{ .float_32 = .{ c.r, c.g, c.b, c.a } } };
+}
+
+
+pub const CommandBuffer = struct {
+    e_vulkan: *rendering.EggyVulkanInterface,
+    cmd: vk.CommandBuffer,
+    frame_index: usize,
+
+    /// Create a CommandBuffer for the current frame.
+    pub fn init(e_vulkan: *rendering.EggyVulkanInterface) CommandBuffer {
+        return .{
+            .e_vulkan = e_vulkan,
+            .cmd = e_vulkan.command_buffers[e_vulkan.current_frame],
+            .frame_index = e_vulkan.current_frame,
+        };
+    }
+
+    /// Allocate and begin a one-shot command buffer (not tied to a frame).
+    pub fn begin(e_vulkan: *rendering.EggyVulkanInterface) !CommandBuffer {
+        const allocInfo = vk.CommandBufferAllocateInfo{
+            .command_pool = e_vulkan.command_pool,
+            .level = .primary,
+            .command_buffer_count = 1,
+        };
+
+        var command_buffer: vk.CommandBuffer = undefined;
+        try e_vulkan.device.allocateCommandBuffers(&allocInfo, @ptrCast(&command_buffer));
+
+        const begin_info = vk.CommandBufferBeginInfo{
+            .flags = .{ .one_time_submit_bit = true },
+        };
+        try e_vulkan.device.beginCommandBuffer(command_buffer, &begin_info);
+
+        return CommandBuffer{
+            .e_vulkan = e_vulkan,
+            .cmd = command_buffer,
+            .frame_index = 0,
+        };
+    }
+
+    /// End recording, submit, wait, and free the command buffer. 
+    /// 
+    /// Supports both oneshot command buffers and 
+    pub fn end(self: *@This()) void {
+        self.e_vulkan.device.endCommandBuffer(self.cmd) catch unreachable;
+
+        const submit_info = vk.SubmitInfo{
+            .command_buffer_count = 1,
+            .p_command_buffers = @ptrCast(&self.cmd),
+        };
+        self.e_vulkan.device.queueSubmit(self.e_vulkan.queue.inner, 1, @ptrCast(&submit_info), .null_handle) catch unreachable;
+        self.e_vulkan.device.queueWaitIdle(self.e_vulkan.queue.inner) catch unreachable;
+
+        self.e_vulkan.device.freeCommandBuffers(self.e_vulkan.command_pool, 1, @ptrCast(&self.cmd));
+    }
+
+    /// Begin dynamic rendering with the swapchain image as the color attachment.
+    pub fn beginRendering(self: *@This(), info: RenderingInfo) void {
+        const frame = self;
+
+        self.transitionSwapchainImageLayout(
+            .undefined,
+            .color_attachment_optimal,
+            .{},
+            .{ .color_attachment_write_bit = true },
+            .{ .color_attachment_output_bit = true },
+            .{ .color_attachment_output_bit = true },
+        );
+
+        const attachment_info = vk.RenderingAttachmentInfo{
+            .image_view = frame.e_vulkan.swapchain.image_views.items[frame.e_vulkan.current_image_index],
+            .image_layout = .color_attachment_optimal,
+            .resolve_mode = .{},
+            .resolve_image_view = .null_handle,
+            .resolve_image_layout = .undefined,
+            .load_op = info.color_attachment.load_op.toVk(),
+            .store_op = info.color_attachment.store_op.toVk(),
+            .clear_value = colourToVk(info.color_attachment.clear_color),
+        };
+
+        const rendering_info = vk.RenderingInfo{
+            .render_area = .{
+                .offset = .{ .x = 0, .y = 0 },
+                .extent = frame.e_vulkan.swapchain.swapchain_extent,
+            },
+            .layer_count = 1,
+            .view_mask = 0,
+            .color_attachment_count = 1,
+            .p_color_attachments = @ptrCast(&attachment_info),
+        };
+
+        frame.e_vulkan.device.cmdBeginRendering(frame.cmd, &rendering_info);
+        self.setFullViewport();
+        self.setFullScissor();
+    }
+
+    /// End the current dynamic rendering scope.
+    pub fn endRendering(self: *@This()) void {
+        self.e_vulkan.device.cmdEndRendering(self.cmd);
+    }
 
     /// Bind a graphics pipeline.
-    pub fn setPipeline(self: *RenderPass, p: pipeline.Pipeline) void {
-        self.frame.vulkan.device.cmdBindPipeline(self.frame.cmd, .graphics, p.handle);
+    pub fn bindPipeline(self: *@This(), p: pipeline.Pipeline) void {
+        self.e_vulkan.device.cmdBindPipeline(self.cmd, .graphics, p.handle);
     }
 
-    /// Bind a vertex buffer. Accepts both RawBuffer and Buffer(T).
-    pub fn setVertexBuffer(self: *RenderPass, buf: anytype) void {
-        const offsets = [_]vk.DeviceSize{0};
-        const vk_buffer = if (@hasField(@TypeOf(buf), "raw")) buf.raw.buffer else buf.buffer; // a buffer must contain a `raw` name with the type `RawBuffer`
-        self.frame.vulkan.device.cmdBindVertexBuffers(self.frame.cmd, 0, 1, @ptrCast(&vk_buffer), &offsets);
-    }
-
-    /// Bind an index buffer. Accepts IndexBuffer(T) or RawBuffer.
-    pub fn setIndexBuffer(self: *RenderPass, buf: anytype, index_type: vk.IndexType) void {
-        const vk_buffer = if (@hasField(@TypeOf(buf), "raw")) buf.raw.buffer else buf.buffer;
-        self.frame.vulkan.device.cmdBindIndexBuffer(self.frame.cmd, vk_buffer, 0, index_type);
-    }
-
-    /// Bind a descriptor set for the current frame. 
-    /// 
-    /// The `resource` argument must use a datatype that contains a field of `descriptor_sets`, so this includes UniformBuffers, StorageBuffers, Textures etc). 
-    pub fn bindDescriptor(self: *RenderPass, resource: anytype, p: pipeline.Pipeline) void {
-        const descriptor_set = resource.descriptor_sets[self.frame.frame_index];
-        self.frame.vulkan.device.cmdBindDescriptorSets(
-            self.frame.cmd,
+    /// Bind a descriptor set for the current frame.
+    ///
+    /// The `resource` argument must have a `descriptor_sets` field
+    /// (UniformBuffer, StorageBuffer, Texture, etc).
+    pub fn bindDescriptor(self: *@This(), resource: anytype, p: pipeline.Pipeline) void {
+        const descriptor_set = resource.descriptor_sets[self.frame_index];
+        self.e_vulkan.device.cmdBindDescriptorSets(
+            self.cmd,
             .graphics,
             p.layout,
-            0, // first set
-            1, // descriptor set count
+            0,
+            1,
             @ptrCast(&descriptor_set),
-            0, // dynamic offset count
-            null, // dynamic offsets
+            0,
+            null,
         );
     }
 
+    /// Bind a vertex buffer. Accepts `RawBuffer`, `Buffer(T)`, or `VertexBuffer(T)`.
+    pub fn bindVertexBuffer(self: *@This(), buf: anytype) void {
+        const offsets = [_]vk.DeviceSize{0};
+        const vk_buffer = if (@hasField(@TypeOf(buf), "raw")) buf.raw.buffer else buf.buffer;
+        self.e_vulkan.device.cmdBindVertexBuffers(self.cmd, 0, 1, @ptrCast(&vk_buffer), &offsets);
+    }
+
+    /// Bind an index buffer. Accepts `IndexBuffer(T)` or `RawBuffer`, and `T` must be that of an `index_type`. 
+    pub fn bindIndexBuffer(self: *@This(), buf: anytype, index_type: IndexType) void {
+        const vk_buffer = if (@hasField(@TypeOf(buf), "raw")) buf.raw.buffer else buf.buffer;
+        self.e_vulkan.device.cmdBindIndexBuffer(self.cmd, vk_buffer, 0, index_type.toVk());
+    }
+
     /// Draw vertices directly.
-    pub fn draw(self: *RenderPass, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) void {
-        self.frame.vulkan.device.cmdDraw(self.frame.cmd, vertex_count, instance_count, first_vertex, first_instance);
+    pub fn draw(self: *@This(), vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) void {
+        self.e_vulkan.device.cmdDraw(self.cmd, vertex_count, instance_count, first_vertex, first_instance);
     }
 
     /// Draw indexed vertices.
-    pub fn drawIndexed(self: *RenderPass, index_count: u32, instance_count: u32, first_index: u32, vertex_offset: i32, first_instance: u32) void {
-        self.frame.vulkan.device.cmdDrawIndexed(self.frame.cmd, index_count, instance_count, first_index, vertex_offset, first_instance);
+    pub fn drawIndexed(self: *@This(), index_count: u32, instance_count: u32, first_index: u32, vertex_offset: i32, first_instance: u32) void {
+        self.e_vulkan.device.cmdDrawIndexed(self.cmd, index_count, instance_count, first_index, vertex_offset, first_instance);
+    }
+
+    /// Set viewport to cover the full swapchain extent.
+    pub fn setFullViewport(self: *@This()) void {
+        const ext = self.e_vulkan.swapchain.swapchain_extent;
+        self.setViewport(0, 0, @floatFromInt(ext.width), @floatFromInt(ext.height));
+    }
+
+    /// Set scissor to cover the full swapchain extent.
+    pub fn setFullScissor(self: *@This()) void {
+        const ext = self.e_vulkan.swapchain.swapchain_extent;
+        self.setScissor(0, 0, ext.width, ext.height);
     }
 
     /// Set a custom viewport.
-    pub fn setViewport(self: *RenderPass, x: f32, y: f32, width: f32, height: f32) void {
+    pub fn setViewport(self: *@This(), x: f32, y: f32, width: f32, height: f32) void {
         const viewport = vk.Viewport{
             .x = x,
             .y = y,
@@ -116,268 +256,95 @@ pub const RenderPass = struct {
             .min_depth = 0.0,
             .max_depth = 1.0,
         };
-        self.frame.vulkan.device.cmdSetViewport(self.frame.cmd, 0, 1, @ptrCast(&viewport));
+        self.e_vulkan.device.cmdSetViewport(self.cmd, 0, 1, @ptrCast(&viewport));
     }
 
     /// Set a custom scissor rectangle.
-    pub fn setScissor(self: *RenderPass, x: i32, y: i32, width: u32, height: u32) void {
+    pub fn setScissor(self: *@This(), x: i32, y: i32, width: u32, height: u32) void {
         const scissor = vk.Rect2D{
             .offset = .{ .x = x, .y = y },
             .extent = .{ .width = width, .height = height },
         };
-        self.frame.vulkan.device.cmdSetScissor(self.frame.cmd, 0, 1, @ptrCast(&scissor));
+        self.e_vulkan.device.cmdSetScissor(self.cmd, 0, 1, @ptrCast(&scissor));
     }
 
-    /// End the render pass. Called automatically if using defer.
-    pub fn end(self: *RenderPass) void {
-        if (self.ended) return;
-        self.ended = true;
-
-        self.frame.vulkan.device.cmdEndRendering(self.frame.cmd);
-        self.frame.transitionImageLayout(
-            .color_attachment_optimal,
-            .present_src_khr,
-            .{ .color_attachment_write_bit = true },
-            .{},
-            .{ .color_attachment_output_bit = true },
-            .{ .bottom_of_pipe_bit = true },
-        );
-    }
-};
-
-pub const Frame = struct {
-    pub const AcquireError = error{
-        FenceWaitFailed,
-        SurfaceLost,
-        SwapchainOutOfDate,
-        AcquireFailed,
-        CommandBufferResetFailed,
-        CommandBufferBeginFailed,
-    };
-
-    pub const SubmitResult = enum {
-        success,
-        swapchain_out_of_date,
-        swapchain_suboptimal,
-    };
-
-    vulkan: *rendering.EggyVulkanInterface,
-    cmd: vk.CommandBuffer,
-    image_index: u32,
-    frame_index: usize,
-
-    /// Acquire the next swapchain image and prepare for recording.
-    pub fn acquire(vulkan: *rendering.EggyVulkanInterface, label: [*:0]const u8) AcquireError!Frame {
-        const frame_index = vulkan.current_frame;
-        
-        const fence_result = vulkan.device.waitForFences(1, @ptrCast(&vulkan.draw_fences[frame_index]), .true, std.math.maxInt(u64)) catch {
-            return error.FenceWaitFailed;
+    /// Copy data between two buffers.
+    pub fn copyBuffer(self: *@This(), src: buffer.RawBuffer, dst: buffer.RawBuffer) void {
+        const region = vk.BufferCopy{
+            .src_offset = 0,
+            .dst_offset = 0,
+            .size = src.size,
         };
-        if (fence_result != .success) {
-            return error.FenceWaitFailed;
-        }
-        
-        const acquire_result = vulkan.device.acquireNextImageKHR(
-            vulkan.swapchain.swapchain,
-            std.math.maxInt(u64),
-            vulkan.present_completed_semaphores[frame_index],
-            .null_handle,
-        ) catch |err| {
-            return switch (err) {
-                error.SurfaceLostKHR => error.SurfaceLost,
-                error.OutOfDateKHR => error.SwapchainOutOfDate,
-                else => error.AcquireFailed,
-            };
-        };
-
-        if (acquire_result.result == .error_out_of_date_khr) {
-            return error.SwapchainOutOfDate;
-        }
-        
-        vulkan.device.resetFences(1, @ptrCast(&vulkan.draw_fences[frame_index])) catch {
-            return error.FenceWaitFailed;
-        };
-
-        const cmd_buf = vulkan.command_buffers[frame_index];
-        vulkan.device.resetCommandBuffer(cmd_buf, .{}) catch {
-            return error.CommandBufferResetFailed;
-        };
-
-        @import("debug.zig").vkSetName(vulkan.device, vk.CommandBuffer, cmd_buf, label);
-
-        vulkan.device.beginCommandBuffer(cmd_buf, &.{
-            .flags = .{ .one_time_submit_bit = true },
-        }) catch {
-            return error.CommandBufferBeginFailed;
-        };
-
-        return Frame{
-            .vulkan = vulkan,
-            .cmd = cmd_buf,
-            .image_index = acquire_result.image_index,
-            .frame_index = frame_index,
-        };
+        self.e_vulkan.device.cmdCopyBuffer(self.cmd, src.buffer, dst.buffer, 1, @ptrCast(&region));
     }
 
-    /// Submit the command buffer and present the frame.
-    pub fn submit(self: *Frame) !SubmitResult {
-        try self.vulkan.device.endCommandBuffer(self.cmd);
+    pub fn transitionImageLayout(self: *@This(), tex: texture.Texture, old_layout: ImageLayout, new_layout: ImageLayout) void {
+        var src_access_mask: vk.AccessFlags = .{};
+        var dst_access_mask: vk.AccessFlags = .{};
+        var src_stage_mask: vk.PipelineStageFlags = .{};
+        var dst_stage_mask: vk.PipelineStageFlags = .{};
 
-        const frame_index = self.frame_index;
-        const image_index = self.image_index;
-        
-        const wait_stage = vk.PipelineStageFlags{ .color_attachment_output_bit = true };
-        const submit_info = vk.SubmitInfo{
-            .wait_semaphore_count = 1,
-            .p_wait_semaphores = @ptrCast(&self.vulkan.present_completed_semaphores[frame_index]),
-            .p_wait_dst_stage_mask = @ptrCast(&wait_stage),
-            .command_buffer_count = 1,
-            .p_command_buffers = @ptrCast(&self.cmd),
-            .signal_semaphore_count = 1,
-            .p_signal_semaphores = @ptrCast(&self.vulkan.render_finished_semaphores.items[image_index]),
-        };
-        try self.vulkan.device.queueSubmit(self.vulkan.queue.inner, 1, @ptrCast(&submit_info), self.vulkan.draw_fences[frame_index]);
+        const old_vk = old_layout.toVk();
+        const new_vk = new_layout.toVk();
 
-        const present_info = vk.PresentInfoKHR{
-            .wait_semaphore_count = 1,
-            .p_wait_semaphores = @ptrCast(&self.vulkan.render_finished_semaphores.items[image_index]),
-            .swapchain_count = 1,
-            .p_swapchains = @ptrCast(&self.vulkan.swapchain.swapchain),
-            .p_image_indices = @ptrCast(&self.image_index),
-        };
-        
-        const present_result = self.vulkan.device.queuePresentKHR(self.vulkan.queue.inner, &present_info) catch |err| {
-            return switch (err) {
-                error.OutOfDateKHR => .swapchain_out_of_date,
-                else => err,
-            };
-        };
-        
-        self.vulkan.current_frame = (self.vulkan.current_frame + 1) % rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT;
-        
-        if (present_result == .suboptimal_khr) {
-            return .swapchain_suboptimal;
+        if (old_vk == .undefined and new_vk == .transfer_dst_optimal) {
+            src_access_mask = .{};
+            dst_access_mask = .{ .transfer_write_bit = true };
+            src_stage_mask = .{ .top_of_pipe_bit = true };
+            dst_stage_mask = .{ .transfer_bit = true };
+        } else if (old_vk == .transfer_dst_optimal and new_vk == .shader_read_only_optimal) {
+            src_access_mask = .{ .transfer_write_bit = true };
+            dst_access_mask = .{ .shader_read_bit = true };
+            src_stage_mask = .{ .transfer_bit = true };
+            dst_stage_mask = .{ .fragment_shader_bit = true };
+        } else {
+            @panic("unsupported layout transition");
         }
-        if (self.vulkan.framebuffer_resized) {
-            self.vulkan.framebuffer_resized = false;
-            return .swapchain_suboptimal;
-        }
-        
-        return .success;
-    }
 
-    /// Begin rendering to the swapchain image with the specified clear color.
-    pub fn beginRendering(self: *Frame, clear_color: colour.Colour) void {
-        self.transitionImageLayout(
-            .undefined,
-            .color_attachment_optimal,
-            .{},
-            .{ .color_attachment_write_bit = true },
-            .{ .color_attachment_output_bit = true },
-            .{ .color_attachment_output_bit = true },
-        );
-
-        const attachment_info = vk.RenderingAttachmentInfo{
-            .image_view = self.vulkan.swapchain.image_views.items[self.image_index],
-            .image_layout = .color_attachment_optimal,
-            .resolve_mode = .{},
-            .resolve_image_view = .null_handle,
-            .resolve_image_layout = .undefined,
-            .load_op = .clear,
-            .store_op = .store,
-            .clear_value = colourToVk(clear_color),
-        };
-
-        const rendering_info = vk.RenderingInfo{
-            .render_area = .{
-                .offset = .{ .x = 0, .y = 0 },
-                .extent = self.vulkan.swapchain.swapchain_extent,
+        const barrier = vk.ImageMemoryBarrier{
+            .src_access_mask = src_access_mask,
+            .dst_access_mask = dst_access_mask,
+            .old_layout = old_vk,
+            .new_layout = new_vk,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = tex.texture,
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
             },
-            .layer_count = 1,
-            .view_mask = 0,
-            .color_attachment_count = 1,
-            .p_color_attachments = @ptrCast(&attachment_info),
         };
 
-        self.vulkan.device.cmdBeginRendering(self.cmd, &rendering_info);
-        self.setFullViewport();
-        self.setFullScissor();
+        self.e_vulkan.device.cmdPipelineBarrier(self.cmd, src_stage_mask, dst_stage_mask, .{}, 0, null, 0, null, 1, @ptrCast(&barrier));
     }
 
-    /// Begin a scoped render pass. Use with defer for automatic cleanup:
-    /// ```
-    /// var pass = frame.beginRenderPass(.{ .color_attachment = .{ .clear_color = colour.red } });
-    /// defer pass.end();
-    /// pass.setPipeline(my_pipeline);
-    /// pass.draw(3, 1, 0, 0);
-    /// ```
-    pub fn beginRenderPass(self: *Frame, desc: RenderPassDescriptor) RenderPass {
-        self.transitionImageLayout(
-            .undefined,
-            .color_attachment_optimal,
-            .{},
-            .{ .color_attachment_write_bit = true },
-            .{ .color_attachment_output_bit = true },
-            .{ .color_attachment_output_bit = true },
-        );
-
-        const attachment_info = vk.RenderingAttachmentInfo{
-            .image_view = self.vulkan.swapchain.image_views.items[self.image_index],
-            .image_layout = .color_attachment_optimal,
-            .resolve_mode = .{},
-            .resolve_image_view = .null_handle,
-            .resolve_image_layout = .undefined,
-            .load_op = desc.color_attachment.load_op.toVk(),
-            .store_op = desc.color_attachment.store_op.toVk(),
-            .clear_value = colourToVk(desc.color_attachment.clear_color),
-        };
-
-        const rendering_info = vk.RenderingInfo{
-            .render_area = .{
-                .offset = .{ .x = 0, .y = 0 },
-                .extent = self.vulkan.swapchain.swapchain_extent,
+    /// Copy a buffer's contents into a texture image.
+    /// The texture must already be in transfer_dst_optimal layout.
+    pub fn copyBufferToImage(self: *@This(), buf: buffer.RawBuffer, tex: texture.Texture, width: u32, height: u32) void {
+        const region = vk.BufferImageCopy{
+            .buffer_offset = 0,
+            .buffer_row_length = 0,
+            .buffer_image_height = 0,
+            .image_subresource = .{
+                .aspect_mask = .{ .color_bit = true },
+                .mip_level = 0,
+                .base_array_layer = 0,
+                .layer_count = 1,
             },
-            .layer_count = 1,
-            .view_mask = 0,
-            .color_attachment_count = 1,
-            .p_color_attachments = @ptrCast(&attachment_info),
+            .image_offset = .{ .x = 0, .y = 0, .z = 0 },
+            .image_extent = .{ .width = width, .height = height, .depth = 1 },
         };
 
-        self.vulkan.device.cmdBeginRendering(self.cmd, &rendering_info);
-        self.setFullViewport();
-        self.setFullScissor();
-
-        return RenderPass{
-            .frame = self,
-        };
+        self.e_vulkan.device.cmdCopyBufferToImage(self.cmd, buf.buffer, tex.texture, .transfer_dst_optimal, 1, @ptrCast(&region));
     }
 
-    /// End rendering and transition image for presentation.
-    pub fn endRendering(self: *Frame) void {
-        self.vulkan.device.cmdEndRendering(self.cmd);
-        self.transitionImageLayout(
-            .color_attachment_optimal,
-            .present_src_khr,
-            .{ .color_attachment_write_bit = true },
-            .{},
-            .{ .color_attachment_output_bit = true },
-            .{ .bottom_of_pipe_bit = true },
-        );
-    }
 
-    /// Bind a graphics pipeline.
-    pub fn bindPipeline(self: *Frame, p: pipeline.Pipeline) void {
-        self.vulkan.device.cmdBindPipeline(self.cmd, .graphics, p.handle);
-    }
-
-    /// Draw vertices directly.
-    pub fn draw(self: *Frame, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) void {
-        self.vulkan.device.cmdDraw(self.cmd, vertex_count, instance_count, first_vertex, first_instance);
-    }
-
-    /// Transition the swapchain image layout.
-    pub fn transitionImageLayout(
-        self: *Frame,
+    /// Transition the current swapchain image layout
+    pub fn transitionSwapchainImageLayout(
+        self: *@This(),
         old_layout: vk.ImageLayout,
         new_layout: vk.ImageLayout,
         src_access_mask: vk.AccessFlags2,
@@ -394,7 +361,7 @@ pub const Frame = struct {
             .new_layout = new_layout,
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .image = self.vulkan.swapchain.swapchain_images.items[self.image_index],
+            .image = self.e_vulkan.swapchain.swapchain_images.items[self.e_vulkan.current_image_index],
             .subresource_range = .{
                 .aspect_mask = .{ .color_bit = true },
                 .base_mip_level = 0,
@@ -409,53 +376,12 @@ pub const Frame = struct {
             .p_image_memory_barriers = @ptrCast(&barrier),
         };
 
-        self.vulkan.device.cmdPipelineBarrier2(self.cmd, &dependency_info);
-    }
-
-    /// Set viewport to cover the full swapchain extent.
-    pub fn setFullViewport(self: *Frame) void {
-        self.setViewport(0, 0, @floatFromInt(self.vulkan.swapchain.swapchain_extent.width), @floatFromInt(self.vulkan.swapchain.swapchain_extent.height));
-    }
-
-    /// Set scissor to cover the full swapchain extent.
-    pub fn setFullScissor(self: *Frame) void {
-        self.setScissor(0, 0, self.vulkan.swapchain.swapchain_extent.width, self.vulkan.swapchain.swapchain_extent.height);
-    }
-
-    /// Set a custom viewport.
-    pub fn setViewport(self: *Frame, x: f32, y: f32, width: f32, height: f32) void {
-        const viewport = vk.Viewport{
-            .x = x,
-            .y = y,
-            .width = width,
-            .height = height,
-            .min_depth = 0.0,
-            .max_depth = 1.0,
-        };
-        self.vulkan.device.cmdSetViewport(self.cmd, 0, 1, @ptrCast(&viewport));
-    }
-
-    /// Set a custom scissor rectangle.
-    pub fn setScissor(self: *Frame, x: i32, y: i32, width: u32, height: u32) void {
-        const scissor = vk.Rect2D{
-            .offset = .{ .x = x, .y = y },
-            .extent = .{ .width = width, .height = height },
-        };
-        self.vulkan.device.cmdSetScissor(self.cmd, 0, 1, @ptrCast(&scissor));
-    }
-
-    /// Get the current swapchain image.
-    pub fn swapchainImage(self: *Frame) vk.Image {
-        return self.vulkan.swapchain.swapchain_images.items[self.image_index];
-    }
-
-    /// Get the current swapchain image view.
-    pub fn swapchainImageView(self: *Frame) vk.ImageView {
-        return self.vulkan.swapchain.image_views.items[self.image_index];
+        self.e_vulkan.device.cmdPipelineBarrier2(self.cmd, &dependency_info);
     }
 
     /// Get the swapchain extent.
-    pub fn extent(self: *Frame) vk.Extent2D {
-        return self.vulkan.swapchain.swapchain_extent;
+    pub fn extent(self: *@This()) Extent2D {
+        const ext = self.e_vulkan.swapchain.swapchain_extent;
+        return .{ .width = ext.width, .height = ext.height };
     }
 };

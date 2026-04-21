@@ -33,6 +33,11 @@ fn buildEggyLibrary(
         .optimize = optimize,
     });
 
+    const zigimg_dependency = b.dependency("zigimg", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const eggy_module = b.createModule(.{
         .root_source_file = b.path("src/engine/eggy.zig"),
         .target = target,
@@ -42,6 +47,7 @@ fn buildEggyLibrary(
     eggy_module.addImport("vulkan", vulkan);
     eggy_module.addImport("sdl3", sdl3.module("sdl3"));
     eggy_module.addImport("logly", logly_dep.module("logly"));
+    eggy_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
 
     return eggy_module;
 }

@@ -3,6 +3,7 @@ pub const pipeline = @import("pipeline.zig");
 pub const cmd = @import("command.zig");
 pub const swapchain = @import("swapchain.zig");
 pub const buffer = @import("buffer.zig");
+pub const texture = @import("texture.zig");
 pub const vkSetName = @import("debug.zig").vkSetName;
 
 const sdl = @import("sdl3");
@@ -72,6 +73,7 @@ pub const EggyVulkanInterface = struct {
     present_completed_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore,
     draw_fences: [MAX_FRAMES_IN_FLIGHT]vk.Fence,
     current_frame: usize,
+    current_image_index: u32,
     framebuffer_resized: bool,
 
     render_finished_semaphores: std.ArrayList(vk.Semaphore),
@@ -431,6 +433,7 @@ pub const EggyVulkanInterface = struct {
             self.draw_fences[i] = try self.device.createFence(&fence_info, null);
         }
         self.current_frame = 0;
+        self.current_image_index = 0;
         self.framebuffer_resized = false;
 
         self.render_finished_semaphores = .empty;
@@ -438,6 +441,124 @@ pub const EggyVulkanInterface = struct {
             const sem = try self.device.createSemaphore(&semaphore_info, null);
             try self.render_finished_semaphores.append(self.allocator, sem);
         }
+    }
+
+    pub const AcquireError = error{
+        FenceWaitFailed,
+        SurfaceLost,
+        SwapchainOutOfDate,
+        AcquireFailed,
+        CommandBufferResetFailed,
+        CommandBufferBeginFailed,
+    };
+
+    pub const SubmitResult = enum {
+        success,
+        swapchain_out_of_date,
+        swapchain_suboptimal,
+    };
+
+    pub fn beginFrame(self: *@This(), label: [*:0]const u8) AcquireError!void {
+        const frame_index = self.current_frame;
+
+        const fence_result = self.device.waitForFences(1, @ptrCast(&self.draw_fences[frame_index]), .true, std.math.maxInt(u64)) catch {
+            return error.FenceWaitFailed;
+        };
+        if (fence_result != .success) {
+            return error.FenceWaitFailed;
+        }
+
+        const acquire_result = self.device.acquireNextImageKHR(
+            self.swapchain.swapchain,
+            std.math.maxInt(u64),
+            self.present_completed_semaphores[frame_index],
+            .null_handle,
+        ) catch |err| {
+            return switch (err) {
+                error.SurfaceLostKHR => error.SurfaceLost,
+                error.OutOfDateKHR => error.SwapchainOutOfDate,
+                else => error.AcquireFailed,
+            };
+        };
+
+        if (acquire_result.result == .error_out_of_date_khr) {
+            return error.SwapchainOutOfDate;
+        }
+
+        self.device.resetFences(1, @ptrCast(&self.draw_fences[frame_index])) catch {
+            return error.FenceWaitFailed;
+        };
+
+        const cmd_buf = self.command_buffers[frame_index];
+        self.device.resetCommandBuffer(cmd_buf, .{}) catch {
+            return error.CommandBufferResetFailed;
+        };
+
+        @import("debug.zig").vkSetName(self.device, vk.CommandBuffer, cmd_buf, label);
+
+        self.device.beginCommandBuffer(cmd_buf, &.{
+            .flags = .{ .one_time_submit_bit = true },
+        }) catch {
+            return error.CommandBufferBeginFailed;
+        };
+
+        self.current_image_index = acquire_result.image_index;
+    }
+
+    /// Submit the recorded command buffer and present the frame.
+    pub fn endFrame(self: *@This(), command_buffer: *cmd.CommandBuffer) !SubmitResult {
+        command_buffer.transitionSwapchainImageLayout(
+            .color_attachment_optimal,
+            .present_src_khr,
+            .{ .color_attachment_write_bit = true },
+            .{},
+            .{ .color_attachment_output_bit = true },
+            .{ .bottom_of_pipe_bit = true },
+        );
+
+        try self.device.endCommandBuffer(command_buffer.cmd);
+
+        const frame_index = self.current_frame;
+        const image_index = self.current_image_index;
+
+        const wait_stage = vk.PipelineStageFlags{ .color_attachment_output_bit = true };
+        const submit_info = vk.SubmitInfo{
+            .wait_semaphore_count = 1,
+            .p_wait_semaphores = @ptrCast(&self.present_completed_semaphores[frame_index]),
+            .p_wait_dst_stage_mask = @ptrCast(&wait_stage),
+            .command_buffer_count = 1,
+            .p_command_buffers = @ptrCast(&command_buffer.cmd),
+            .signal_semaphore_count = 1,
+            .p_signal_semaphores = @ptrCast(&self.render_finished_semaphores.items[image_index]),
+        };
+        try self.device.queueSubmit(self.queue.inner, 1, @ptrCast(&submit_info), self.draw_fences[frame_index]);
+
+        const present_info = vk.PresentInfoKHR{
+            .wait_semaphore_count = 1,
+            .p_wait_semaphores = @ptrCast(&self.render_finished_semaphores.items[image_index]),
+            .swapchain_count = 1,
+            .p_swapchains = @ptrCast(&self.swapchain.swapchain),
+            .p_image_indices = @ptrCast(&self.current_image_index),
+        };
+
+        const present_result = self.device.queuePresentKHR(self.queue.inner, &present_info) catch |err| {
+            return switch (err) {
+                error.OutOfDateKHR => .swapchain_out_of_date,
+                else => err,
+            };
+        };
+
+        self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+
+        if (present_result == .suboptimal_khr) {
+            return .swapchain_suboptimal;
+        }
+        if (self.framebuffer_resized) {
+            self.framebuffer_resized = false;
+            return .swapchain_suboptimal;
+        }
+
+        return .success;
     }
 };
 

@@ -4,6 +4,9 @@ const eggy = @import("eggy");
 const rendering = eggy.module.rendering.vulkan;
 const pipeline = rendering.pipeline;
 const cmd = rendering.cmd;
+const vk = rendering.vk;
+
+const file = @embedFile("image.png");
 
 pub fn main() !void {
     var app = try eggy.EggyApp(&.{ eggy.module.DefaultModule(.{}, eggy.module.rendering.vulkan.EggyVulkanInterface), struct {
@@ -90,11 +93,14 @@ pub const VKModule = struct {
     uniform_buffer: rendering.buffer.UniformBuffer(UBO) = undefined,
 
     ubo: UBO = undefined,
+    image: rendering.texture.Texture = undefined,
 
     pub const schedules = .{
         .init = .{init},
         .update = .{update},
+        .pre_render = .{pre_render},
         .render = .{render},
+        .post_render = .{post_render},
         .deinit = .{deinit},
     };
 
@@ -125,6 +131,7 @@ pub const VKModule = struct {
         self.index_buffer = try rendering.buffer.IndexBuffer(u16).init(vulkan, &indices, "quad index buffer");
 
         self.uniform_buffer = try rendering.buffer.UniformBuffer(UBO).init(vulkan, self.pipeline, "uniform buffer");
+        self.image = try rendering.texture.Texture.initFromMemory(vulkan, file, "flight image");
         self.start_time = std.time.nanoTimestamp();
     }
 
@@ -152,50 +159,60 @@ pub const VKModule = struct {
         self.uniform_buffer.write(self.ubo);
     }
 
-    pub fn render(self: *@This(), ctx: *eggy.Context) !void {
+    pub fn pre_render(ctx: *eggy.Context) !void {
         const vulkan = ctx.world.getResource(eggy.module.rendering.vulkan.EggyVulkanInterface) orelse return;
 
-        var frame = cmd.Frame.acquire(vulkan, "command buffer") catch |err| switch (err) {
+        vulkan.beginFrame("command buffer") catch |err| switch (err) {
             error.SurfaceLost => {
-                std.debug.print("Frame.acquire failed: SurfaceLost\n", .{});
+                std.debug.print("beginFrame failed: SurfaceLost\n", .{});
                 ctx.quit();
                 return;
             },
             error.SwapchainOutOfDate => {
-                std.debug.print("Frame.acquire failed: SwapchainOutOfDate\n", .{});
+                std.debug.print("beginFrame failed: SwapchainOutOfDate\n", .{});
                 try vulkan.swapchain.recreate(vulkan);
                 return;
             },
             else => {
-                std.debug.print("Frame.acquire failed: {any}\n", .{err});
+                std.debug.print("beginFrame failed: {any}\n", .{err});
                 return err;
             },
         };
+    }
 
-        {
-            var pass = frame.beginRenderPass(.{
-                .color_attachment = .{
-                    .clear_color = eggy.colour.Colour.transparent,
-                    .load_op = .clear,
-                    .store_op = .store,
-                },
-            });
-            defer pass.end();
+    pub fn render(self: *@This(), ctx: *eggy.Context) !void {
+        const vulkan = ctx.world.getResource(eggy.module.rendering.vulkan.EggyVulkanInterface) orelse return;
+        var command_buffer = cmd.CommandBuffer.init(vulkan);
 
-            pass.setPipeline(self.pipeline);
-            pass.setVertexBuffer(self.vertex_buffer);
-            pass.setIndexBuffer(self.index_buffer, .uint16);
-            pass.bindDescriptor(self.uniform_buffer, self.pipeline);
-            pass.drawIndexed(indices.len, 1, 0, 0, 0);
-        }
+        command_buffer.beginRendering(.{
+            .color_attachment = .{
+                .clear_color = eggy.colour.Colour.transparent,
+                .load_op = .clear,
+                .store_op = .store,
+            },
+        });
 
-        const submit_result = try frame.submit();
+        command_buffer.bindPipeline(self.pipeline);
+        command_buffer.bindVertexBuffer(self.vertex_buffer);
+        command_buffer.bindIndexBuffer(self.index_buffer, .uint16);
+        command_buffer.bindDescriptor(self.uniform_buffer, self.pipeline);
+        command_buffer.drawIndexed(indices.len, 1, 0, 0, 0);
+
+        command_buffer.endRendering();
+    }
+
+    pub fn post_render(ctx: *eggy.Context) !void {
+        const vulkan = ctx.world.getResource(eggy.module.rendering.vulkan.EggyVulkanInterface) orelse return;
+        var command_buffer = cmd.CommandBuffer.init(vulkan);
+
+        const submit_result = try vulkan.endFrame(&command_buffer);
         if (submit_result == .swapchain_out_of_date or submit_result == .swapchain_suboptimal) {
             try vulkan.swapchain.recreate(vulkan);
         }
     }
 
     pub fn deinit(self: *@This(), _: *eggy.Context) void {
+        self.image.deinit();
         self.vertex_buffer.deinit();
         self.index_buffer.deinit();
         self.uniform_buffer.deinit();

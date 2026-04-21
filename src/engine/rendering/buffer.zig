@@ -160,6 +160,8 @@ pub const RawBuffer = struct {
     }
 
     /// Copy data to the buffer. The buffer must be host-visible.
+    /// 
+    /// This already maps and unmaps the data for you, however you can map yourself with `RawBuffer.map/unmap`. 
     pub fn copyFromSlice(self: *RawBuffer, comptime T: type, data: []const T) !void {
         const mapped = try self.map();
         if (mapped) |ptr| {
@@ -216,9 +218,22 @@ pub fn createBuffer(
     return .{ .buffer = raw.buffer, .mem = raw.mem };
 }
 
+/// Ensures that the alignment of the struct is suited to multiples of 16 bytes. 
+/// 
+/// If failure to check, it will result in a compile-time error. 
+pub fn checkAlignment(comptime T: type) void {
+    if (@sizeOf(T) % 16 != 0) {
+        @compileError(std.fmt.comptimePrint("The type '{s}' must be aligned by 16 byte multiples (currently {d}). Use `eggy.math.Padding` to pad and ensure alignment", .{ @typeName(T), @sizeOf(T) }));
+    }
+}
+
 /// A typed block of memory allocated to the GPU, with support for dirty-state checking. 
 pub fn Buffer(comptime T: type) type {
     return struct {
+        comptime {
+            checkAlignment(T);
+        }
+
         raw: RawBuffer,
         data: []const T,
         dirty: bool,
@@ -386,6 +401,9 @@ pub fn IndexBuffer(comptime T: type) type {
 /// In the shader-slang, this would be a `ConstantBuffer<T> foo;`
 pub fn UniformBuffer(comptime T: type) type {
     return struct {
+        comptime {
+            checkAlignment(T);
+        }
         raw: RawBuffer,
         mapped: [*]T,
 
