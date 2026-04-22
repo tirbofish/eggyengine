@@ -121,8 +121,8 @@ pub const EggyVulkanInterface = struct {
         return self;
     }
 
-    /// A common function that waits for the device to finish operations before doing anything. 
-    // Other backends must implement this. 
+    /// A common function that waits for the device to finish operations before doing anything.
+    // Other backends must implement this.
     pub fn await(self: @This()) !void {
         try self.device.deviceWaitIdle();
     }
@@ -169,7 +169,9 @@ pub const EggyVulkanInterface = struct {
 
         if (self.options.enable_validation_layers) {
             if (try checkLayerSupport(&self.vkb, self.allocator, &.{validation_layer_name}) == false) {
-                return error.MissingValidationLayer; // or potentially skip without validation?
+                eggy.logger.warningf("Missing Vulkan validation layers, therefore disabled. Try installing the Vulkan SDK or disable in eggy.", .{}, @src()) catch {};
+                self.options.enable_validation_layers = false; // since its an error
+                // return error.MissingValidationLayer; // or potentially skip without validation?
             }
         }
 
@@ -255,7 +257,7 @@ pub const EggyVulkanInterface = struct {
             return error.NoVulkanDevices;
         }
 
-        const PhysicalDeviceScore = struct { device: vk.PhysicalDevice, score: u32 };
+        const PhysicalDeviceScore = struct { device: vk.PhysicalDevice, score: u128 };
 
         var pq = std.PriorityQueue(PhysicalDeviceScore, void, struct {
             fn compare(_: void, a: PhysicalDeviceScore, b: PhysicalDeviceScore) std.math.Order {
@@ -285,8 +287,8 @@ pub const EggyVulkanInterface = struct {
         return error.NoSuitableDevice;
     }
 
-    fn scoreDevice(self: *@This(), device: vk.PhysicalDevice) !u32 {
-        var score: u32 = 0;
+    fn scoreDevice(self: *@This(), device: vk.PhysicalDevice) !u128 {
+        var score: u128 = 0;
 
         const props = self.instance.getPhysicalDeviceProperties(device);
 
@@ -406,7 +408,7 @@ pub const EggyVulkanInterface = struct {
     }
 
     fn createCommandPool(self: *@This()) !void {
-        const poolInfo = vk.CommandPoolCreateInfo {
+        const poolInfo = vk.CommandPoolCreateInfo{
             .flags = .{ .reset_command_buffer_bit = true },
             .queue_family_index = self.queue.family_index,
         };
@@ -424,9 +426,7 @@ pub const EggyVulkanInterface = struct {
 
     fn createSyncObjects(self: *@This()) !void {
         const semaphore_info: vk.SemaphoreCreateInfo = .{};
-        const fence_info = vk.FenceCreateInfo {
-            .flags = .{ .signaled_bit = true }
-        };
+        const fence_info = vk.FenceCreateInfo{ .flags = .{ .signaled_bit = true } };
 
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             self.present_completed_semaphores[i] = try self.device.createSemaphore(&semaphore_info, null);

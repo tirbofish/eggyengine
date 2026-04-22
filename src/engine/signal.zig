@@ -23,7 +23,7 @@ fn defaultHandler() void {
     interrupted.store(true, .release);
 }
 
-fn windowsCtrlHandler(dwCtrlType: u32) callconv(std.os.windows.WINAPI) std.os.windows.BOOL {
+fn windowsCtrlHandler(dwCtrlType: u32) callconv(.winapi) std.os.windows.BOOL {
     switch (dwCtrlType) {
         CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT => {
             interrupted.store(true, .release);
@@ -37,13 +37,13 @@ pub fn listenFor(sig: u8, comptime f: fn () void) void {
     if (builtin.os.tag == .windows) {
         return;
     }
-    
+
     const Handler = struct {
         pub fn handle(_: c_int) callconv(.c) void {
             f();
         }
     };
-    
+
     var sa: std.posix.Sigaction = .{
         .handler = .{ .handler = Handler.handle },
         .mask = std.mem.zeroes(std.posix.sigset_t),
