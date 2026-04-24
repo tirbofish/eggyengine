@@ -140,7 +140,7 @@ pub const RawBuffer = struct {
         errdefer e_vulkan.device.freeMemory(mem, null);
 
         try e_vulkan.device.bindBufferMemory(buffer, mem, 0);
-        try @import("../eggy.zig").logger.tracef("Initialised new buffer '{any}' [flags={any}]", .{label, usage}, @src());
+        std.log.debug("Initialised new buffer '{any}' [flags={any}]", .{label, usage});
         return RawBuffer{
             .e_vulkan = e_vulkan,
             .buffer = buffer,
@@ -185,7 +185,7 @@ pub fn copyBuffer(e_vulkan: *rendering.EggyVulkanInterface, src: vk.Buffer, dst:
         .level = .primary,
         .command_buffer_count = 1,
     }, @ptrCast(&cmd_buf));
-    defer e_vulkan.device.freeCommandBuffers(e_vulkan.command_pool, 1, @ptrCast(&cmd_buf));
+    defer e_vulkan.device.freeCommandBuffers(e_vulkan.command_pool, &.{cmd_buf});
 
     try e_vulkan.device.beginCommandBuffer(cmd_buf, &.{
         .flags = .{ .one_time_submit_bit = true },
@@ -196,7 +196,7 @@ pub fn copyBuffer(e_vulkan: *rendering.EggyVulkanInterface, src: vk.Buffer, dst:
         .dst_offset = 0,
         .size = size,
     };
-    e_vulkan.device.cmdCopyBuffer(cmd_buf, src, dst, 1, @ptrCast(&copy_region));
+    e_vulkan.device.cmdCopyBuffer(cmd_buf, src, dst, &.{copy_region});
 
     try e_vulkan.device.endCommandBuffer(cmd_buf);
 
@@ -204,7 +204,7 @@ pub fn copyBuffer(e_vulkan: *rendering.EggyVulkanInterface, src: vk.Buffer, dst:
         .command_buffer_count = 1,
         .p_command_buffers = @ptrCast(&cmd_buf),
     };
-    try e_vulkan.device.queueSubmit(e_vulkan.queue.inner, 1, @ptrCast(&submit_info), .null_handle);
+    try e_vulkan.device.queueSubmit(e_vulkan.queue.inner, &.{submit_info}, .null_handle);
     try e_vulkan.device.queueWaitIdle(e_vulkan.queue.inner);
 }
 
@@ -471,7 +471,7 @@ pub fn UniformBuffer(comptime T: type) type {
                     .p_texel_buffer_view = undefined,
                 };
 
-                e_vulkan.device.updateDescriptorSets(1, @ptrCast(&descriptor_write), 0, null);
+                e_vulkan.device.updateDescriptorSets(&.{descriptor_write}, null);
             }
 
             // try logger.tracef("Initialised new UniformBuffer");

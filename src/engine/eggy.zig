@@ -10,9 +10,6 @@ pub const module = @import("mod.zig");
 pub const math = @import("math.zig");
 pub const mem = @import("mem.zig");
 pub const colour = @import("utils/colour.zig");
-const logly = @import("logly");
-
-pub var logger: *logly.Logger = undefined;
 
 /// The fixed timestep for `fixed_update` schedules.
 const FIXED_TIMESTEP: f32 = 1.0 / 60.0;
@@ -69,12 +66,6 @@ const EggyAppOptions = struct {
     ///
     /// By default, if it is built in debug, it is set as true.
     panic_on_err: bool = @import("builtin").mode == .Debug,
-
-    /// Config set by the backend `logly`
-    logger_config: logly.Config = .{
-        .level = .debug,
-        .auto_flush = true,
-    },
 };
 
 pub fn EggyApp(comptime user_modules: []const type) type {
@@ -90,6 +81,7 @@ pub fn EggyApp(comptime user_modules: []const type) type {
         const Self = @This();
 
         allocator: std.mem.Allocator,
+        proc_init: std.process.Init,
         world: ecs.World,
         modules: std.meta.Tuple(modules),
         running: bool,
@@ -98,20 +90,16 @@ pub fn EggyApp(comptime user_modules: []const type) type {
 
         options: EggyAppOptions,
 
-        pub fn init(allocator: std.mem.Allocator, opt: EggyAppOptions) !Self {
+        pub fn init(proc_init: std.process.Init, opt: EggyAppOptions) !Self {
             var self = Self{
-                .allocator = allocator,
-                .world = ecs.World.init(allocator),
+                .allocator = proc_init.gpa,
+                .world = ecs.World.init(proc_init.gpa),
                 .modules = undefined,
                 .running = true,
                 .delta_time = 0,
                 .options = opt,
+                .proc_init = proc_init,
             };
-
-            // enable ANSI colours on windows
-            _ = logly.Terminal.enableAnsiColors();
-            logger = try logly.Logger.init(allocator);
-            logger.configure(opt.logger_config);
 
             // default init all modules
             inline for (&self.modules, 0..) |*m, i| {
@@ -135,7 +123,6 @@ pub fn EggyApp(comptime user_modules: []const type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            logger.deinit();
             self.runSchedule(.pre_deinit);
             self.runSchedule(.deinit);
             self.runSchedule(.post_deinit);
@@ -144,13 +131,12 @@ pub fn EggyApp(comptime user_modules: []const type) type {
 
         pub fn run(self: *Self) void {
             signal.setupDefaults();
-
-            var last_time = std.time.nanoTimestamp();
+            var last_time = std.Io.Clock.now(.awake, self.proc_init.io).nanoseconds;
             var frame_count: u32 = 0;
             var fps_timer: i128 = 0;
 
             while (self.running and !signal.wasInterrupted()) {
-                const now = std.time.nanoTimestamp();
+                const now = std.Io.Clock.now(.awake, self.proc_init.io).nanoseconds;
                 const delta_ns = now - last_time;
                 last_time = now;
 
@@ -192,6 +178,7 @@ pub fn EggyApp(comptime user_modules: []const type) type {
                 .allocator = self.allocator,
                 .delta_time = dt,
                 .running = &self.running,
+                .proc_init = &self.proc_init,
             };
 
             const is_deinit = schedule == .pre_deinit or schedule == .deinit or schedule == .post_deinit;
@@ -242,11 +229,12 @@ pub fn EggyApp(comptime user_modules: []const type) type {
                                             err,
                                         });
                                     }
-                                    logger.errf("[{s}] System '{s}' failed: {}", .{
+                                    
+                                    std.log.err("[{s}] System '{s}' failed: {}", .{
                                         schedule_name,
                                         @typeName(M),
                                         err,
-                                    }, @src()) catch {};
+                                    });
                                 };
                             }
                         }

@@ -5,20 +5,16 @@
     .version = "0.15.2",
     .dependencies = .{
         .vulkan = .{
-            .url = "git+https://github.com/Snektron/vulkan-zig/?ref=zig-0.15-compat#3ada9e2989bab70090a55f0f6fac19ea90d06357",
-            .hash = "vulkan-0.0.0-r7Ytx6FIAwD3QyrrJhvObO0YSZ6WEkMGSCPKbhM__HFd",
+            .url = "git+https://github.com/Snektron/vulkan-zig#6d77ac2a9b25c8940d493b2f7739c639c4842482",
+            .hash = "vulkan-0.0.0-r7Ytx7l9AwCsebml5bToJyyr67VASs0-7UszmWKVXNb7",
         },
         .sdl3 = .{
-            .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=master#6d418ef3ddae99098414a96a88bf5e5fdb41785e",
-            .hash = "sdl3-0.1.9-NmT1QwiEJwByePqkmArtppCHQn8Y7kiSWcncT_Mop8ie",
-        },
-        .logly = .{
-            .url = "https://github.com/muhammad-fiaz/logly.zig/archive/refs/tags/0.1.7.tar.gz",
-            .hash = "logly-0.1.7-kZjLe39xFADjPTzf1uQZJOoBV-25UFvQMI_TnBTwOJBk",
+            .url = "git+https://codeberg.org/7Games/zig-sdl3#40c2e4b579aa556db37a502c936426aa1c8b5c95",
+            .hash = "sdl3-0.2.0-NmT1Q0mFJwBi9kZmArzh2rfJ_mFshydV0zPGULVlpACc",
         },
         .zigimg = .{
-            .url = "git+https://github.com/zigimg/zigimg.git?ref=zig-0.15#7b98e82621fe302a9edc147df1191f4d1b7ff7a5",
-            .hash = "zigimg-0.1.0-8_eo2qWHFwA-S24SH7x7NplPii0EbIQiUfDrimgA6rzN",
+            .url = "git+https://github.com/zigimg/zigimg.git#c7e81a13bff1cf4c5b7f085a8360f9d551143d40",
+            .hash = "zigimg-0.1.0-8_eo2uScFwCnpzB1Y2n_jf3euDfMEeCLxJE_E5_W5BNe",
         },
     },
     .paths = .{""},

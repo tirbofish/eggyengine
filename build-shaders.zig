@@ -41,7 +41,7 @@ pub fn addShaderBuildStep(b: *std.Build) *std.Build.Step {
             compile_cmd.addArgs(&.{ "-entry", entry });
         }
 
-        const output_name = std.mem.trimRight(u8, shader.name, ".slang");
+        const output_name = std.mem.trimEnd(u8, shader.name, ".slang");
         compile_cmd.addArg("-o");
         compile_cmd.addArg(b.fmt("{s}/{s}.spv", .{ output_dir, output_name }));
 
@@ -53,28 +53,28 @@ pub fn addShaderBuildStep(b: *std.Build) *std.Build.Step {
 
 fn findSlangc(b: *std.Build) ?[]const u8 {
     // Try VULKAN_SDK environment variable first
-    if (std.process.getEnvVarOwned(b.allocator, "VULKAN_SDK")) |sdk_path| {
+    
+    if (b.graph.environ_map.get("VULKAN_SDK")) |sdk_path| {
         const slangc = if (builtin.os.tag == .windows)
             b.fmt("{s}/Bin/slangc.exe", .{sdk_path})
         else
             b.fmt("{s}/x86_64/bin/slangc", .{sdk_path});
-
-        if (std.fs.cwd().access(slangc, .{})) |_| {
+        if (std.Io.Dir.cwd().access(b.graph.io, slangc, .{})) |_| {
             return slangc;
         } else |_| {}
-    } else |_| {}
+    } else {}
 
     // Try PATH
-    if (std.process.getEnvVarOwned(b.allocator, "PATH")) |path_env| {
+    if (b.graph.environ_map.get("PATH")) |path_env| {
         const slangc_name = if (builtin.os.tag == .windows) "slangc.exe" else "slangc";
         var path_iter = std.mem.splitScalar(u8, path_env, if (builtin.os.tag == .windows) ';' else ':');
         while (path_iter.next()) |dir| {
             const slangc = b.fmt("{s}/{s}", .{ dir, slangc_name });
-            if (std.fs.cwd().access(slangc, .{})) |_| {
+            if (std.Io.Dir.cwd().access(b.graph.io, slangc, .{})) |_| {
                 return slangc;
             } else |_| {}
         }
-    } else |_| {}
+    } else {}
 
     return null;
 }

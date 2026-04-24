@@ -7,9 +7,10 @@ pub const Context = struct {
     allocator: std.mem.Allocator,
     delta_time: f32,
     running: *bool,
+    proc_init: *std.process.Init,
 
     pub fn quit(self: *Context) void {
-        eggy.logger.debug("Quit signal received from eggy.Context", @src()) catch {};
+        std.log.debug("Quit signal received from eggy.Context", .{});
         self.running.* = false;
     }
 };

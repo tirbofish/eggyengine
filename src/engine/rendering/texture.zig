@@ -5,6 +5,7 @@ const rendering = @import("vulkan.zig");
 const cmd = @import("command.zig");
 const vk = @import("vulkan");
 const debug = @import("debug.zig");
+const Context = @import("../ctx.zig").Context;
 
 pub const Texture = struct {
     e_vulkan: *rendering.EggyVulkanInterface,
@@ -12,16 +13,16 @@ pub const Texture = struct {
     texture: vk.Image,
     texture_mem: vk.DeviceMemory,
 
-    pub fn initFromFile(e_vulkan: *rendering.EggyVulkanInterface, file: *std.fs.File, label: ?[*:0]const u8) !Texture {
+    pub fn initFromFile(ctx: *Context, e_vulkan: *rendering.EggyVulkanInterface, file: std.Io.File, label: ?[*:0]const u8) !Texture {
         var read_buffer: [zigimg.io.DEFAULT_BUFFER_SIZE]u8 = undefined;
-        var image = try zigimg.Image.fromFile(e_vulkan.allocator, file, read_buffer[0..]);
-        defer image.deinit(e_vulkan.allocator);
+        var image = try zigimg.Image.fromFile(ctx.proc_init.gpa, ctx.proc_init.io, file, read_buffer[0..]);
+        defer image.deinit(ctx.proc_init.gpa);
         return Texture.init(e_vulkan, &image, label);
     }
 
-    pub fn initFromMemory(e_vulkan: *rendering.EggyVulkanInterface, data: []const u8, label: ?[*:0]const u8) !Texture {
-        var image = try zigimg.Image.fromMemory(e_vulkan.allocator, data);
-        defer image.deinit(e_vulkan.allocator);
+    pub fn initFromMemory(ctx: *Context, e_vulkan: *rendering.EggyVulkanInterface, data: []const u8, label: ?[*:0]const u8) !Texture {
+        var image = try zigimg.Image.fromMemory(ctx.proc_init.gpa, data);
+        defer image.deinit(ctx.proc_init.gpa);
         return Texture.init(e_vulkan, &image, label);
     }
 

@@ -174,16 +174,16 @@ pub const World = struct {
     resource_deinit_fns: std.AutoHashMapUnmanaged(usize, *const fn (*anyopaque, std.mem.Allocator) void),
 
     pub fn init(allocator: std.mem.Allocator) World {
-        const systems = std.EnumArray(Schedule, std.ArrayListUnmanaged(SystemFn)).initFill(.{});
+        const systems = std.EnumArray(Schedule, std.ArrayListUnmanaged(SystemFn)).initFill(.empty);
 
         return .{
             .allocator = allocator,
-            .generations = .{},
-            .free_list = .{},
-            .storages = .{},
+            .generations = .empty,
+            .free_list = .empty,
+            .storages = .empty,
             .systems = systems,
-            .resources = .{},
-            .resource_deinit_fns = .{},
+            .resources = .empty,
+            .resource_deinit_fns = .empty,
         };
     }
 
@@ -446,26 +446,16 @@ pub fn Query(comptime Components: type) type {
 pub fn QueryMut(comptime Components: type) type {
     const fields = std.meta.fields(Components);
 
-    // Build a struct with pointers instead of values
     const PointerComponents = blk: {
-        var ptr_fields: [fields.len]std.builtin.Type.StructField = undefined;
+        var field_names: [fields.len][:0]const u8 = undefined;
+        var field_types: [fields.len]type = undefined;
+        var field_attrs: [fields.len]std.builtin.Type.StructField.Attributes = undefined;
         for (fields, 0..) |field, i| {
-            ptr_fields[i] = .{
-                .name = field.name,
-                .type = *field.type,
-                .default_value_ptr = null,
-                .is_comptime = false,
-                .alignment = @alignOf(*field.type),
-            };
+            field_names[i] = field.name;
+            field_types[i] = *field.type;
+            field_attrs[i] = .{};
         }
-        break :blk @Type(.{
-            .@"struct" = .{
-                .layout = .auto,
-                .fields = &ptr_fields,
-                .decls = &.{},
-                .is_tuple = false,
-            },
-        });
+        break :blk @Struct(.auto, null, &field_names, &field_types, &field_attrs);
     };
 
     return struct {

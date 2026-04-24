@@ -1,7 +1,7 @@
 pub const sdl = @import("sdl3");
 const eggy = @import("eggy.zig");
 const input = @import("input.zig");
-const log = @import("std").log;
+const std = @import("std");
 
 pub const WindowingModuleOptions = struct {
     init_flags: sdl.InitFlags = .{
@@ -40,7 +40,7 @@ pub fn WindowingModule(comptime options: WindowingModuleOptions, comptime sdl_ba
                 .video = true,
             };
             try sdl.init(init_flags);
-            try eggy.logger.debug("SDL initialised", @src());
+            std.log.debug("SDL initialised", .{});
 
             const window = try sdl.video.Window.init(options.title, options.size.x, options.size.y, .{
                 .fullscreen = options.window_flags.fullscreen,
@@ -70,7 +70,7 @@ pub fn WindowingModule(comptime options: WindowingModuleOptions, comptime sdl_ba
             });
             self.window = window;
             try ctx.world.insertResource(window);
-            try eggy.logger.debug("Window initialised", @src());
+            std.log.debug("Window initialised", .{});
         }
 
         fn deinit(this: *@This(), _: *eggy.Context) void {

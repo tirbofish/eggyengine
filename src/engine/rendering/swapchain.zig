@@ -97,7 +97,7 @@ pub const Swapchain = struct {
             try self.image_views.append(e_vulkan.allocator, image_view);
         }
 
-        eggy.logger.debugf("Created swapchain with {d} images", .{swapchain_images.len}, @src()) catch {};
+        std.log.debug("Created swapchain with {d} images", .{swapchain_images.len});
         return self;
     }
 

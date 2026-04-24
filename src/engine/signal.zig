@@ -14,8 +14,8 @@ pub fn setupDefaults() void {
         _ = std.os.windows.kernel32.SetConsoleCtrlHandler(windowsCtrlHandler, 1);
     } else {
         // posix
-        listenFor(std.posix.SIG.INT, defaultHandler);
-        listenFor(std.posix.SIG.TERM, defaultHandler);
+        listenFor(.INT, defaultHandler);
+        listenFor(.TERM, defaultHandler);
     }
 }
 
@@ -33,13 +33,13 @@ fn windowsCtrlHandler(dwCtrlType: u32) callconv(.winapi) std.os.windows.BOOL {
     }
 }
 
-pub fn listenFor(sig: u8, comptime f: fn () void) void {
+pub fn listenFor(sig: std.posix.SIG, comptime f: fn () void) void {
     if (builtin.os.tag == .windows) {
         return;
     }
 
     const Handler = struct {
-        pub fn handle(_: c_int) callconv(.c) void {
+        pub fn handle(_: std.posix.SIG) callconv(.c) void {
             f();
         }
     };

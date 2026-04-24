@@ -137,10 +137,10 @@ pub const CommandBuffer = struct {
             .command_buffer_count = 1,
             .p_command_buffers = @ptrCast(&self.cmd),
         };
-        self.e_vulkan.device.queueSubmit(self.e_vulkan.queue.inner, 1, @ptrCast(&submit_info), .null_handle) catch unreachable;
+        self.e_vulkan.device.queueSubmit(self.e_vulkan.queue.inner, &.{submit_info}, .null_handle) catch unreachable;
         self.e_vulkan.device.queueWaitIdle(self.e_vulkan.queue.inner) catch unreachable;
 
-        self.e_vulkan.device.freeCommandBuffers(self.e_vulkan.command_pool, 1, @ptrCast(&self.cmd));
+        self.e_vulkan.device.freeCommandBuffers(self.e_vulkan.command_pool, &.{self.cmd});
     }
 
     /// Begin dynamic rendering with the swapchain image as the color attachment.
@@ -204,9 +204,7 @@ pub const CommandBuffer = struct {
             .graphics,
             p.layout,
             0,
-            1,
             @ptrCast(&descriptor_set),
-            0,
             null,
         );
     }
@@ -215,7 +213,7 @@ pub const CommandBuffer = struct {
     pub fn bindVertexBuffer(self: *@This(), buf: anytype) void {
         const offsets = [_]vk.DeviceSize{0};
         const vk_buffer = if (@hasField(@TypeOf(buf), "raw")) buf.raw.buffer else buf.buffer;
-        self.e_vulkan.device.cmdBindVertexBuffers(self.cmd, 0, 1, @ptrCast(&vk_buffer), &offsets);
+        self.e_vulkan.device.cmdBindVertexBuffers(self.cmd, 0, @ptrCast(&vk_buffer), &offsets);
     }
 
     /// Bind an index buffer. Accepts `IndexBuffer(T)` or `RawBuffer`, and `T` must be that of an `index_type`. 
@@ -256,7 +254,8 @@ pub const CommandBuffer = struct {
             .min_depth = 0.0,
             .max_depth = 1.0,
         };
-        self.e_vulkan.device.cmdSetViewport(self.cmd, 0, 1, @ptrCast(&viewport));
+        const viewports = [_]vk.Viewport{viewport};
+        self.e_vulkan.device.cmdSetViewport(self.cmd, 0, &viewports);
     }
 
     /// Set a custom scissor rectangle.
@@ -265,7 +264,8 @@ pub const CommandBuffer = struct {
             .offset = .{ .x = x, .y = y },
             .extent = .{ .width = width, .height = height },
         };
-        self.e_vulkan.device.cmdSetScissor(self.cmd, 0, 1, @ptrCast(&scissor));
+        const scissors = [_]vk.Rect2D{scissor};
+        self.e_vulkan.device.cmdSetScissor(self.cmd, 0, &scissors);
     }
 
     /// Copy data between two buffers.
@@ -318,7 +318,7 @@ pub const CommandBuffer = struct {
             },
         };
 
-        self.e_vulkan.device.cmdPipelineBarrier(self.cmd, src_stage_mask, dst_stage_mask, .{}, 0, null, 0, null, 1, @ptrCast(&barrier));
+        self.e_vulkan.device.cmdPipelineBarrier(self.cmd, src_stage_mask, dst_stage_mask, .{}, null, null, &.{barrier});
     }
 
     /// Copy a buffer's contents into a texture image.
@@ -338,7 +338,7 @@ pub const CommandBuffer = struct {
             .image_extent = .{ .width = width, .height = height, .depth = 1 },
         };
 
-        self.e_vulkan.device.cmdCopyBufferToImage(self.cmd, buf.buffer, tex.texture, .transfer_dst_optimal, 1, @ptrCast(&region));
+        self.e_vulkan.device.cmdCopyBufferToImage(self.cmd, buf.buffer, tex.texture, .transfer_dst_optimal, &.{region});
     }
 
 

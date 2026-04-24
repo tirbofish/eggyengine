@@ -1,16 +1,18 @@
 const rendering = @import("vulkan.zig");
 const vk = @import("vulkan");
 const std = @import("std");
+const Context = @import("../ctx.zig").Context;
 
 pub const Shader = struct {
     e_vulkan: *rendering.EggyVulkanInterface,
     module: vk.ShaderModule,
 
     /// Helper function to create a shader module from SPIR-V contents.
-    pub fn init_from_file(e_vulkan: *rendering.EggyVulkanInterface, file: std.fs.File, allocator: std.mem.Allocator) !@This() {
-        const stat = try file.stat();
-        const contents = try file.readToEndAlloc(allocator, stat.size);
-        defer allocator.free(contents);
+    pub fn init_from_file(e_vulkan: *rendering.EggyVulkanInterface, file: std.Io.File, ctx: *Context) !@This() {
+        var buf: [4096]u8 = undefined;
+        var reader = std.Io.File.Reader.init(file, ctx.proc_init.io, &buf);
+        const contents = try reader.interface.allocRemaining(ctx.allocator, .unlimited);
+        defer ctx.allocator.free(contents);
 
         return try Shader.init(e_vulkan, contents);
     }
@@ -690,20 +692,19 @@ pub const PipelineBuilder = struct {
             .base_pipeline_index = -1,
         };
 
-        var handle: vk.Pipeline = undefined;
+        var pipeline: vk.Pipeline = undefined;
         _ = try self.vulkan.device.createGraphicsPipelines(
-            .null_handle,
-            1,
-            @ptrCast(&pipeline_info),
+        .null_handle,
+            &.{pipeline_info},
             null,
-            @ptrCast(&handle),
+            (&pipeline)[0..1],
         );
-        rendering.vkSetName(self.vulkan.device, vk.Pipeline, handle, self.label);
-        try @import("../eggy.zig").logger.tracef("Initialised new pipeline '{any}", .{self.label}, @src());
+        rendering.vkSetName(self.vulkan.device, vk.Pipeline, pipeline, self.label);
+        std.log.debug("Initialised new pipeline '{any}", .{self.label});
 
         return Pipeline{
             .vulkan = self.vulkan,
-            .handle = handle,
+            .handle = pipeline,
             .layout = layout,
             .descriptor_set_layout = descriptor_set_layout,
         };

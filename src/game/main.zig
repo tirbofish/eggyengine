@@ -8,10 +8,10 @@ const vk = rendering.vk;
 
 const file = @embedFile("image.png");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var app = try eggy.EggyApp(&.{ eggy.module.DefaultModule(.{}, eggy.module.rendering.vulkan.EggyVulkanInterface), struct {
         pub const schedules = .{ .update = &.{escape_to_quit} };
-    }, VKModule }).init(std.heap.page_allocator, .{});
+    }, VKModule }).init(init, .{});
     defer app.deinit();
 
     app.run();
@@ -107,10 +107,10 @@ pub const VKModule = struct {
     pub fn init(self: *@This(), ctx: *eggy.Context) !void {
         const vulkan = ctx.world.getResource(eggy.module.rendering.vulkan.EggyVulkanInterface) orelse return;
 
-        const shader_file = try std.fs.cwd().openFile("zig-out/bin/shaders/shader.spv", .{});
-        defer shader_file.close();
+        const shader_file = try std.Io.Dir.cwd().openFile(ctx.proc_init.io, "zig-out/bin/shaders/shader.spv", .{});
+        defer shader_file.close(ctx.proc_init.io);
 
-        var shader = try pipeline.Shader.init_from_file(vulkan, shader_file, ctx.allocator);
+        var shader = try pipeline.Shader.init_from_file(vulkan, shader_file, ctx);
         defer shader.deinit();
 
         var builder = pipeline.Pipeline.builder(vulkan, ctx.allocator, "main pipeline");
@@ -131,13 +131,13 @@ pub const VKModule = struct {
         self.index_buffer = try rendering.buffer.IndexBuffer(u16).init(vulkan, &indices, "quad index buffer");
 
         self.uniform_buffer = try rendering.buffer.UniformBuffer(UBO).init(vulkan, self.pipeline, "uniform buffer");
-        self.image = try rendering.texture.Texture.initFromMemory(vulkan, file, "flight image");
-        self.start_time = std.time.nanoTimestamp();
+        self.image = try rendering.texture.Texture.initFromMemory(ctx, vulkan, file, "flight image");
+        self.start_time = @intCast(std.Io.Clock.now(.awake, ctx.proc_init.io).nanoseconds);
     }
 
     pub fn update(self: *@This(), ctx: *eggy.Context) !void {
         const vulkan = ctx.world.getResource(eggy.module.rendering.vulkan.EggyVulkanInterface) orelse return;
-        const currentTime = std.time.nanoTimestamp();
+        const currentTime: i128 = @intCast(std.Io.Clock.now(.awake, ctx.proc_init.io).nanoseconds);
         
         const time: f32 = @as(f32, @floatFromInt(currentTime - self.start_time)) / 1_000_000_000.0;
 

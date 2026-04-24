@@ -45,7 +45,7 @@ pub const EggyVulkanInterface = struct {
 
     pub fn ensure_available() !void {
         try sdl.vulkan.loadLibrary(null);
-        eggy.logger.debug("Vulkan library is loaded", @src()) catch {};
+        std.log.debug("Vulkan library is loaded", .{});
     }
 
     allocator: Allocator,
@@ -117,7 +117,7 @@ pub const EggyVulkanInterface = struct {
 
         try createSyncObjects(&self);
 
-        eggy.logger.debug("Initialised vulkan for eggy", @src()) catch {};
+        std.log.debug("Initialised vulkan for eggy", .{});
         return self;
     }
 
@@ -169,7 +169,7 @@ pub const EggyVulkanInterface = struct {
 
         if (self.options.enable_validation_layers) {
             if (try checkLayerSupport(&self.vkb, self.allocator, &.{validation_layer_name}) == false) {
-                eggy.logger.warningf("Missing Vulkan validation layers, therefore disabled. Try installing the Vulkan SDK or disable in eggy.", .{}, @src()) catch {};
+                std.log.warn("Missing Vulkan validation layers, therefore disabled. Try installing the Vulkan SDK or disable in eggy.", .{});
                 self.options.enable_validation_layers = false; // since its an error
                 // return error.MissingValidationLayer; // or potentially skip without validation?
             }
@@ -263,12 +263,12 @@ pub const EggyVulkanInterface = struct {
             fn compare(_: void, a: PhysicalDeviceScore, b: PhysicalDeviceScore) std.math.Order {
                 return std.math.order(b.score, a.score);
             }
-        }.compare).init(self.allocator, {});
-        defer pq.deinit();
+        }.compare).empty;
+        defer pq.deinit(self.allocator);
 
         for (pdevs) |device| {
             if (try isDeviceSuitable(self, device)) {
-                try pq.add(.{ .device = device, .score = try scoreDevice(self, device) });
+                try pq.push(self.allocator, .{ .device = device, .score = try scoreDevice(self, device) });
             }
         }
 
@@ -278,8 +278,8 @@ pub const EggyVulkanInterface = struct {
             self.mem_props = self.instance.getPhysicalDeviceMemoryProperties(scored.device);
 
             const props = self.instance.getPhysicalDeviceProperties(scored.device);
-            eggy.logger.infof("Selected GPU: {s}", .{std.mem.sliceTo(&props.device_name, 0)}, @src()) catch {};
-            eggy.logger.debugf("GPU selected was ranked {d}/{d} with a score of {d} points", .{ 1, pq.count(), scored.score }, @src()) catch {};
+            std.log.info("Selected GPU: {s}", .{std.mem.sliceTo(&props.device_name, 0)});
+            std.log.debug("GPU selected was ranked {d}/{d} with a score of {d} points", .{ 1, pq.count(), scored.score });
 
             return;
         }
@@ -351,7 +351,7 @@ pub const EggyVulkanInterface = struct {
 
         const qfi = queue_family_index orelse return error.NoSuitableQueueFamily;
 
-        eggy.logger.debugf("Using queue family index {d}", .{qfi}, @src()) catch {};
+        std.log.debug("Using queue family index {d}", .{qfi});
 
         const device_extensions = [_][*:0]const u8{
             vk.extensions.khr_swapchain.name,
@@ -399,12 +399,23 @@ pub const EggyVulkanInterface = struct {
 
         const get_device_proc_addr = self.instance.wrapper.dispatch.vkGetDeviceProcAddr orelse return error.MissingDeviceProcAddr;
         const device_wrapper = try self.allocator.create(vk.DeviceWrapper);
+
         device_wrapper.* = vk.DeviceWrapper.load(device_handle, get_device_proc_addr);
+
+        if (device_wrapper.dispatch.vkCreateGraphicsPipelines == null) {
+            std.log.err("vkCreateGraphicsPipelines is NULL right after loading!", .{});
+            std.log.err("vkCreateComputePipelines null: {}", .{device_wrapper.dispatch.vkCreateComputePipelines == null});
+            std.log.err("vkCreatePipelineLayout null: {}", .{device_wrapper.dispatch.vkCreatePipelineLayout == null});
+            std.log.err("vkDestroyPipeline null: {}", .{device_wrapper.dispatch.vkDestroyPipeline == null});
+        } else {
+            std.log.debug("vkCreateGraphicsPipelines loaded OK", .{});
+        }
+
         self.device = vk.DeviceProxy.init(device_handle, device_wrapper);
 
         self.queue = Queue{ .family_index = qfi, .inner = self.device.getDeviceQueue(qfi, 0) };
 
-        eggy.logger.debug("Created logical device and queue", @src()) catch {};
+        std.log.debug("Created logical device and queue", .{});
     }
 
     fn createCommandPool(self: *@This()) !void {
@@ -461,7 +472,7 @@ pub const EggyVulkanInterface = struct {
     pub fn beginFrame(self: *@This(), label: [*:0]const u8) AcquireError!void {
         const frame_index = self.current_frame;
 
-        const fence_result = self.device.waitForFences(1, @ptrCast(&self.draw_fences[frame_index]), .true, std.math.maxInt(u64)) catch {
+        const fence_result = self.device.waitForFences(@ptrCast(&self.draw_fences[frame_index]), .true, std.math.maxInt(u64)) catch {
             return error.FenceWaitFailed;
         };
         if (fence_result != .success) {
@@ -485,7 +496,10 @@ pub const EggyVulkanInterface = struct {
             return error.SwapchainOutOfDate;
         }
 
-        self.device.resetFences(1, @ptrCast(&self.draw_fences[frame_index])) catch {
+        const fences = [_]vk.Fence {
+            self.draw_fences[frame_index]
+        };
+        self.device.resetFences(&fences) catch {
             return error.FenceWaitFailed;
         };
 
@@ -531,7 +545,7 @@ pub const EggyVulkanInterface = struct {
             .signal_semaphore_count = 1,
             .p_signal_semaphores = @ptrCast(&self.render_finished_semaphores.items[image_index]),
         };
-        try self.device.queueSubmit(self.queue.inner, 1, @ptrCast(&submit_info), self.draw_fences[frame_index]);
+        try self.device.queueSubmit(self.queue.inner, @ptrCast(&submit_info), self.draw_fences[frame_index]);
 
         const present_info = vk.PresentInfoKHR{
             .wait_semaphore_count = 1,

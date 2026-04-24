@@ -26,12 +26,8 @@ fn buildEggyLibrary(
 
     const vulkan = b.dependency("vulkan", .{
         .registry = b.path("deps/vk.xml"),
+        // .optimize = .ReleaseSafe,
     }).module("vulkan-zig");
-
-    const logly_dep = b.dependency("logly", .{
-        .target = target,
-        .optimize = optimize,
-    });
 
     const zigimg_dependency = b.dependency("zigimg", .{
         .target = target,
@@ -46,7 +42,6 @@ fn buildEggyLibrary(
 
     eggy_module.addImport("vulkan", vulkan);
     eggy_module.addImport("sdl3", sdl3.module("sdl3"));
-    eggy_module.addImport("logly", logly_dep.module("logly"));
     eggy_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
 
     return eggy_module;
@@ -55,14 +50,15 @@ fn buildEggyLibrary(
 fn buildExecutable(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    _: std.builtin.OptimizeMode,
     eggy: *std.Build.Module,
     shader_step: *std.Build.Step,
 ) void {
     const root_module = b.createModule(.{
         .root_source_file = b.path("src/game/main.zig"),
         .target = target,
-        .optimize = optimize,
+        // .optimize = optimize,
+        .optimize = .ReleaseSafe, // for now until zigimg is fixed
     });
 
     root_module.addImport("eggy", eggy);
@@ -72,7 +68,6 @@ fn buildExecutable(
         .root_module = root_module,
     });
 
-    // Shaders should be built before the executable
     exe.step.dependOn(shader_step);
 
     b.installArtifact(exe);
