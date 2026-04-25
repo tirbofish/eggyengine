@@ -48,7 +48,7 @@ pub fn RenderingModule(comptime BackendImpl: type) type {
 
         fn deinit(self: *@This(), _: *eggy.Context) void {
             if (self.backend) |b| {
-                b.deinit();
+                // b.deinit(); // this will crash on exit after resize
                 self.allocator.?.destroy(b);
             }
         }

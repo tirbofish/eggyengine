@@ -74,7 +74,6 @@ pub const EggyVulkanInterface = struct {
     draw_fences: [MAX_FRAMES_IN_FLIGHT]vk.Fence,
     current_frame: usize,
     current_image_index: u32,
-    framebuffer_resized: bool,
 
     render_finished_semaphores: std.ArrayList(vk.Semaphore),
 
@@ -479,7 +478,6 @@ pub const EggyVulkanInterface = struct {
         }
         self.current_frame = 0;
         self.current_image_index = 0;
-        self.framebuffer_resized = false;
 
         self.render_finished_semaphores = .empty;
         for (0..self.swapchain.swapchain_images.items.len) |_| {
@@ -601,10 +599,6 @@ pub const EggyVulkanInterface = struct {
         if (present_result == .suboptimal_khr) {
             return .swapchain_suboptimal;
         }
-        if (self.framebuffer_resized) {
-            self.framebuffer_resized = false;
-            return .swapchain_suboptimal;
-        }
 
         return .success;
     }
@@ -620,15 +614,15 @@ fn debugCallback(
     _ = p_user_data;
 
     // NOTE: enabling this code will cause a segfault. it is best to use std.debug.print
-    // if (p_callback_data) |data| {
-    //     if (message_severity.error_bit_ext) {
-    //         eggy.logger.errf("[vulkan] {s}\n", .{ data.p_message orelse "(no message)" }, @src()) catch {};
-    //     }
-    //     else if (message_severity.warning_bit_ext)
-    //         {eggy.logger.warnf("[vulkan] {s}\n", .{ data.p_message orelse "(no message)" }, @src()) catch {};}
-    //     else
-    //         {eggy.logger.infof("[vulkan] {s}\n", .{ data.p_message orelse "(no message)" }, @src()) catch {};}
-    // }
+    if (p_callback_data) |data| {
+        if (message_severity.error_bit_ext) {
+            std.log.err("[vulkan] {s}\n", .{ data.p_message orelse "(no message)" });
+        }
+        else if (message_severity.warning_bit_ext)
+            {std.log.warn("[vulkan] {s}\n", .{ data.p_message orelse "(no message)" });}
+        else
+            {std.log.info("[vulkan] {s}\n", .{ data.p_message orelse "(no message)" });}
+    }
 
     const severity_str = if (message_severity.error_bit_ext)
         "ERROR"

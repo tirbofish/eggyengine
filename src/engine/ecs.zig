@@ -524,3 +524,35 @@ pub fn QueryMut(comptime Components: type) type {
         }
     };
 }
+
+pub fn Events(comptime T: type) type {
+    return struct {
+        events: std.ArrayListUnmanaged(T) = .empty,
+        allocator: std.mem.Allocator,
+
+        const Self = @This();
+
+        pub fn init(allocator: std.mem.Allocator) Self {
+            return .{ .allocator = allocator };
+        }
+
+        /// Send an event (available until the next drain).
+        pub fn send(self: *Self, event: T) void {
+            self.events.append(self.allocator, event) catch {};
+        }
+
+        /// Read all pending events.
+        pub fn read(self: *Self) []const T {
+            return self.events.items;
+        }
+
+        /// Clear the queue. Call once per frame (e.g. at pre_update).
+        pub fn drain(self: *Self) void {
+            self.events.clearRetainingCapacity();
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.events.deinit(self.allocator);
+        }
+    };
+}

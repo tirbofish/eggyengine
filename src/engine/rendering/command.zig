@@ -5,6 +5,7 @@ const texture = @import("texture.zig");
 const vk = @import("vulkan");
 const colour = @import("../utils/colour.zig");
 const std = @import("std");
+const math = @import("../math.zig");
 
 
 /// Image layout states.
@@ -67,28 +68,36 @@ pub const StoreOp = enum {
     }
 };
 
-/// Color attachment configuration for rendering.
-pub const ColorAttachment = struct {
-    clear_color: colour.Colour = colour.Colour.black,
+/// Operations for an attachment (load + store behavior).
+pub const Operations = struct {
     load_op: LoadOp = .clear,
     store_op: StoreOp = .store,
+};
+
+/// Color attachment configuration for rendering.
+pub const ColorAttachment = struct {
+    view: ?*texture.TextureView = null,
+    clear_color: colour.Colour = colour.Colour.black,
+    ops: Operations = .{},
+};
+
+pub const DepthStencilAttachment = struct {
+    view: *texture.TextureView,
+    depth_clear_value: f32 = 1.0,
+    depth_ops: Operations = .{ .load_op = .clear, .store_op = .dont_care },
+    stencil_clear_value: u32 = 0,
+    stencil_ops: ?Operations = null,
 };
 
 /// Configuration for beginRendering.
 pub const RenderingInfo = struct {
     color_attachment: ColorAttachment = .{},
-};
-
-/// Extent (width, height).
-pub const Extent2D = struct {
-    width: u32,
-    height: u32,
+    depth_stencil_attachment: ?DepthStencilAttachment = null,
 };
 
 fn colourToVk(c: colour.Colour) vk.ClearValue {
     return .{ .color = .{ .float_32 = .{ c.r, c.g, c.b, c.a } } };
 }
-
 
 pub const CommandBuffer = struct {
     e_vulkan: *rendering.EggyVulkanInterface,
@@ -156,16 +165,63 @@ pub const CommandBuffer = struct {
             .{ .color_attachment_output_bit = true },
         );
 
-        const attachment_info = vk.RenderingAttachmentInfo{
-            .image_view = frame.e_vulkan.swapchain.image_views.items[frame.e_vulkan.current_image_index],
+        if (info.depth_stencil_attachment) |depth| {
+            const image = if (depth.view.texture) |tex| tex.texture else @panic("depth view must reference a texture");
+            const depth_barrier = vk.ImageMemoryBarrier2{
+                .src_stage_mask = .{ .early_fragment_tests_bit = true, .late_fragment_tests_bit = true },
+                .src_access_mask = .{ .depth_stencil_attachment_write_bit = true },
+                .dst_stage_mask = .{ .early_fragment_tests_bit = true, .late_fragment_tests_bit = true },
+                .dst_access_mask = .{ .depth_stencil_attachment_write_bit = true },
+                .old_layout = .undefined,
+                .new_layout = .depth_attachment_optimal,
+                .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+                .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+                .image = image,
+                .subresource_range = .{
+                    .aspect_mask = .{ .depth_bit = true },
+                    .base_mip_level = 0,
+                    .level_count = 1,
+                    .base_array_layer = 0,
+                    .layer_count = 1,
+                },
+            };
+            const dep_info = vk.DependencyInfo{
+                .image_memory_barrier_count = 1,
+                .p_image_memory_barriers = @ptrCast(&depth_barrier),
+            };
+            self.e_vulkan.device.cmdPipelineBarrier2(self.cmd, &dep_info);
+        }
+
+        const color_view = if (info.color_attachment.view) |v|
+            v.image_view
+        else
+            frame.e_vulkan.swapchain.image_views.items[frame.e_vulkan.current_image_index].image_view;
+
+        const color_attachment_info = vk.RenderingAttachmentInfo{
+            .image_view = color_view,
             .image_layout = .color_attachment_optimal,
             .resolve_mode = .{},
             .resolve_image_view = .null_handle,
             .resolve_image_layout = .undefined,
-            .load_op = info.color_attachment.load_op.toVk(),
-            .store_op = info.color_attachment.store_op.toVk(),
+            .load_op = info.color_attachment.ops.load_op.toVk(),
+            .store_op = info.color_attachment.ops.store_op.toVk(),
             .clear_value = colourToVk(info.color_attachment.clear_color),
         };
+
+        var depth_attachment_info: vk.RenderingAttachmentInfo = undefined;
+        const p_depth: ?*const vk.RenderingAttachmentInfo = if (info.depth_stencil_attachment) |depth| blk: {
+            depth_attachment_info = .{
+                .image_view = depth.view.image_view,
+                .image_layout = .depth_stencil_attachment_optimal,
+                .resolve_mode = .{},
+                .resolve_image_view = .null_handle,
+                .resolve_image_layout = .undefined,
+                .load_op = depth.depth_ops.load_op.toVk(),
+                .store_op = depth.depth_ops.store_op.toVk(),
+                .clear_value = .{ .depth_stencil = .{ .depth = depth.depth_clear_value, .stencil = depth.stencil_clear_value } },
+            };
+            break :blk &depth_attachment_info;
+        } else null;
 
         const rendering_info = vk.RenderingInfo{
             .render_area = .{
@@ -175,7 +231,8 @@ pub const CommandBuffer = struct {
             .layer_count = 1,
             .view_mask = 0,
             .color_attachment_count = 1,
-            .p_color_attachments = @ptrCast(&attachment_info),
+            .p_color_attachments = @ptrCast(&color_attachment_info),
+            .p_depth_attachment = p_depth,
         };
 
         frame.e_vulkan.device.cmdBeginRendering(frame.cmd, &rendering_info);
@@ -275,7 +332,7 @@ pub const CommandBuffer = struct {
         self.e_vulkan.device.cmdCopyBuffer(self.cmd, src.buffer, dst.buffer, 1, @ptrCast(&region));
     }
 
-    pub fn transitionImageLayout(self: *@This(), tex: texture.Texture, old_layout: ImageLayout, new_layout: ImageLayout) void {
+    pub fn transitionImageLayout(self: *@This(), tex: texture.Texture, old_layout: ImageLayout, new_layout: ImageLayout, subresource_range: texture.TextureViewOptions.SubresourceRange) void {
         var src_access_mask: vk.AccessFlags = .{};
         var dst_access_mask: vk.AccessFlags = .{};
         var src_stage_mask: vk.PipelineStageFlags = .{};
@@ -306,13 +363,7 @@ pub const CommandBuffer = struct {
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .image = tex.texture,
-            .subresource_range = .{
-                .aspect_mask = .{ .color_bit = true },
-                .base_mip_level = 0,
-                .level_count = 1,
-                .base_array_layer = 0,
-                .layer_count = 1,
-            },
+            .subresource_range = subresource_range.toVk()
         };
 
         self.e_vulkan.device.cmdPipelineBarrier(self.cmd, src_stage_mask, dst_stage_mask, .{}, null, null, &.{barrier});
@@ -377,8 +428,8 @@ pub const CommandBuffer = struct {
     }
 
     /// Get the swapchain extent.
-    pub fn extent(self: *@This()) Extent2D {
+    pub fn extent(self: *@This()) math.Vec2u {
         const ext = self.e_vulkan.swapchain.swapchain_extent;
-        return .{ .width = ext.width, .height = ext.height };
+        return .{ .x = ext.width, .y = ext.height };
     }
 };

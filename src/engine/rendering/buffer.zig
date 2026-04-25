@@ -573,6 +573,7 @@ pub const DescriptorSetResource = struct {
     }
 
     pub fn deinit(self: *@This()) void {
+        self.e_vulkan.await() catch {};
         self.e_vulkan.device.destroyDescriptorPool(self.descriptor_pool, null);
     }
 };

@@ -32,7 +32,7 @@ pub const UBO = struct {
 };
 
 pub const Vertex = struct {
-    position: eggy.math.Vec2,
+    position: eggy.math.Vec3,
     colour: eggy.colour.Colour,
     tex_coord: eggy.math.Vec2,
 
@@ -49,7 +49,7 @@ pub const Vertex = struct {
             .{
                 .location = 0,
                 .binding = 0,
-                .format = .float2,
+                .format = .float3,
                 .offset = @offsetOf(Vertex, "position"),
             },
             .{
@@ -71,29 +71,50 @@ pub const Vertex = struct {
 pub const VKModule = struct {
     const vertices = [_]Vertex {
         .{
-            .position = eggy.math.Vec2.init(-0.5, -0.5),
+            .position = eggy.math.Vec3.init(-0.5, -0.5, 0.0),
             .colour = eggy.colour.Colour.from_f32(1.0, 0.0, 0.0),
             .tex_coord = eggy.math.Vec2.init(1.0, 0.0),
         },
         .{
-            .position = eggy.math.Vec2.init(0.5, -0.5),
+            .position = eggy.math.Vec3.init(0.5, -0.5, 0.0),
             .colour = eggy.colour.Colour.from_f32(0.0, 1.0, 0.0),
             .tex_coord = eggy.math.Vec2.init(0.0, 0.0),
         },
         .{
-            .position = eggy.math.Vec2.init(0.5, 0.5),
+            .position = eggy.math.Vec3.init(0.5, 0.5, 0.0),
             .colour = eggy.colour.Colour.from_f32(0.0, 0.0, 1.0),
             .tex_coord = eggy.math.Vec2.init(0.0, 1.0),
         },
         .{
-            .position = eggy.math.Vec2.init(-0.5, 0.5),
+            .position = eggy.math.Vec3.init(-0.5, 0.5, 0.0),
+            .colour = eggy.colour.Colour.from_f32(1.0, 1.0, 1.0),
+            .tex_coord = eggy.math.Vec2.init(1.0, 1.0),
+        },
+
+        .{
+            .position = eggy.math.Vec3.init(-0.5, -0.5, -0.5),
+            .colour = eggy.colour.Colour.from_f32(1.0, 0.0, 0.0),
+            .tex_coord = eggy.math.Vec2.init(1.0, 0.0),
+        },
+        .{
+            .position = eggy.math.Vec3.init(0.5, -0.5, -0.5),
+            .colour = eggy.colour.Colour.from_f32(0.0, 1.0, 0.0),
+            .tex_coord = eggy.math.Vec2.init(0.0, 0.0),
+        },
+        .{
+            .position = eggy.math.Vec3.init(0.5, 0.5, -0.5),
+            .colour = eggy.colour.Colour.from_f32(0.0, 0.0, 1.0),
+            .tex_coord = eggy.math.Vec2.init(0.0, 1.0),
+        },
+        .{
+            .position = eggy.math.Vec3.init(-0.5, 0.5, -0.5),
             .colour = eggy.colour.Colour.from_f32(1.0, 1.0, 1.0),
             .tex_coord = eggy.math.Vec2.init(1.0, 1.0),
         },
     };
     const indices = [_]u16 {
-        0, 1, 2,
-        2, 3, 0
+        0, 1, 2, 2, 3, 0,
+        4, 5, 6, 6, 7, 4
     };
     
     pipeline: pipeline.Pipeline = undefined,
@@ -101,10 +122,15 @@ pub const VKModule = struct {
 
     vertex_buffer: rendering.buffer.VertexBuffer(Vertex) = undefined,
     index_buffer: rendering.buffer.IndexBuffer(u16) = undefined,
-    uniform_buffer: rendering.buffer.UniformBuffer(UBO) = undefined,
 
+    uniform_buffer: rendering.buffer.UniformBuffer(UBO) = undefined,
     ubo: UBO = undefined,
+
     image: rendering.texture.Texture = undefined,
+    view: rendering.texture.TextureView = undefined,
+    sampler: rendering.texture.Sampler = undefined,
+
+    depth_texture: rendering.texture.Extension.DepthTexture = undefined,
 
     descriptors: rendering.buffer.DescriptorSetResource = undefined,
 
@@ -126,6 +152,17 @@ pub const VKModule = struct {
         var shader = try pipeline.Shader.init_from_file(vulkan, shader_file, ctx);
         defer shader.deinit();
 
+        self.vertex_buffer = try rendering.buffer.VertexBuffer(Vertex).init(vulkan, &vertices, "quad vertex buffer");
+        self.index_buffer = try rendering.buffer.IndexBuffer(u16).init(vulkan, &indices, "quad index buffer");
+
+        self.uniform_buffer = try rendering.buffer.UniformBuffer(UBO).init(vulkan, "uniform buffer");
+
+        self.image = try rendering.texture.Texture.initFromMemory(ctx, vulkan, file, .{ .label = "flight image" });
+        self.view = try rendering.texture.TextureView.init(vulkan, &self.image, .{});
+        self.sampler = try rendering.texture.Sampler.init(vulkan, .{});
+
+        try self.depth_texture.init(vulkan);
+        
         var builder = pipeline.Pipeline.builder(vulkan, ctx.allocator, "main pipeline");
         defer builder.deinit();
         self.pipeline = try builder
@@ -137,19 +174,16 @@ pub const VKModule = struct {
             .cullMode(.back)
             .frontFace(.counter_clockwise)
             .polygonMode(.fill)
+            .depthTest(true)
+            .depthWrite(true)
+            .depthFormat(self.depth_texture.format())
             .addVertexBinding(Vertex.getBindingDescription())
             .addVertexAttributes(&Vertex.getAttributeDescriptions())
             .build();
 
-        self.vertex_buffer = try rendering.buffer.VertexBuffer(Vertex).init(vulkan, &vertices, "quad vertex buffer");
-        self.index_buffer = try rendering.buffer.IndexBuffer(u16).init(vulkan, &indices, "quad index buffer");
-
-        self.uniform_buffer = try rendering.buffer.UniformBuffer(UBO).init(vulkan, "uniform buffer");
-        self.image = try rendering.texture.Texture.initFromMemory(ctx, vulkan, file, "flight image");
-
         self.descriptors = try rendering.buffer.DescriptorSetResource.init(vulkan, self.pipeline, &.{
             .{ .buffer = .{ .binding = 0, .buffer = self.uniform_buffer.raw.buffer, .size = self.uniform_buffer.raw.size } },
-            .{ .image = .{ .binding = 1, .sampler = self.image.sampler, .image_view = self.image.image_view } },
+            .{ .image = .{ .binding = 1, .sampler = self.sampler.sampler, .image_view = self.view.image_view } },
         });
 
         self.start_time = @intCast(std.Io.Clock.now(.awake, ctx.proc_init.io).nanoseconds);
@@ -169,6 +203,7 @@ pub const VKModule = struct {
         );
         const aspect: f32 = @as(f32, @floatFromInt(vulkan.swapchain.swapchain_extent.width)) / 
                             @as(f32, @floatFromInt(vulkan.swapchain.swapchain_extent.height));
+        // std.log.info("projection -> {d}", .{aspect});
         self.ubo.proj = eggy.math.perspective(
             std.math.degreesToRadians(45.0), 
             aspect,
@@ -207,8 +242,9 @@ pub const VKModule = struct {
         command_buffer.beginRendering(.{
             .color_attachment = .{
                 .clear_color = eggy.colour.Colour.transparent,
-                .load_op = .clear,
-                .store_op = .store,
+            },
+            .depth_stencil_attachment = .{
+                .view = &self.depth_texture.depth_view,
             },
         });
 
@@ -221,22 +257,44 @@ pub const VKModule = struct {
         command_buffer.endRendering();
     }
 
-    pub fn post_render(ctx: *eggy.Context) !void {
+    pub fn post_render(self: *@This(), ctx: *eggy.Context) !void {
         const vulkan = ctx.world.getResource(eggy.module.rendering.vulkan.EggyVulkanInterface) orelse return;
-        var command_buffer = cmd.CommandBuffer.init(vulkan);
 
+        var command_buffer = cmd.CommandBuffer.init(vulkan);
         const submit_result = try vulkan.endFrame(&command_buffer);
-        if (submit_result == .swapchain_out_of_date or submit_result == .swapchain_suboptimal) {
+
+        const size = vulkan.window.getSize() catch .{ 0, 0 };
+        const window_resized = size[0] != vulkan.swapchain.swapchain_extent.width or
+                            size[1] != vulkan.swapchain.swapchain_extent.height;
+
+        const vulkan_needs_recreate = (submit_result == .swapchain_out_of_date or submit_result == .swapchain_suboptimal);
+
+        if (vulkan_needs_recreate or window_resized) {
             try vulkan.swapchain.recreate(vulkan);
+            try self.depth_texture.recreate();
         }
     }
 
     pub fn deinit(self: *@This(), _: *eggy.Context) void {
+        self.descriptors.deinit();
+        self.depth_texture.deinit();
+
+        self.sampler.deinit();
+        self.view.deinit();
         self.image.deinit();
+
         self.vertex_buffer.deinit();
         self.index_buffer.deinit();
         self.uniform_buffer.deinit();
-        self.descriptors.deinit();
         self.pipeline.deinit();
+    }
+
+    pub fn onResize(self: *@This(), ctx: *eggy.Context) !void {
+        if (ctx.world.getResource(eggy.ecs.Events(eggy.module.windowing.WindowResizedEvent))) |events| {
+            for (events.read()) |ev| {
+                _ = ev;
+                try self.depth.recreate();
+            }
+        }
     }
 };

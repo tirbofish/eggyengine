@@ -40,6 +40,30 @@ pub const Shader = struct {
     }
 };
 
+pub const CompareOp = enum {
+    never,
+    less,
+    equal,
+    less_or_equal,
+    greater,
+    not_equal,
+    greater_or_equal,
+    always,
+
+    fn toVk(self: CompareOp) vk.CompareOp {
+        return switch (self) {
+            .never => .never,
+            .less => .less,
+            .equal => .equal,
+            .less_or_equal => .less_or_equal,
+            .greater => .greater,
+            .not_equal => .not_equal,
+            .greater_or_equal => .greater_or_equal,
+            .always => .always,
+        };
+    }
+};
+
 pub const Topology = enum {
     point_list,
     line_list,
@@ -410,6 +434,8 @@ pub const PipelineBuilder = struct {
     // Depth/stencil
     depth_test: bool = false,
     depth_write: bool = false,
+    depth_compare_op: CompareOp = .less,
+    depth_format: vk.Format = .undefined,
 
     // Multisampling
     samples: u8 = 1,
@@ -545,6 +571,16 @@ pub const PipelineBuilder = struct {
         return self;
     }
 
+    pub fn depthCompareOp(self: *PipelineBuilder, op: CompareOp) *PipelineBuilder {
+        self.depth_compare_op = op;
+        return self;
+    }
+
+    pub fn depthFormat(self: *PipelineBuilder, format: vk.Format) *PipelineBuilder {
+        self.depth_format = format;
+        return self;
+    }
+
     /// Build the pipeline. Returns error if shaders are not set.
     pub fn build(self: *PipelineBuilder) !Pipeline {
         const vert = self.vert_module orelse return error.MissingVertexShader;
@@ -665,11 +701,23 @@ pub const PipelineBuilder = struct {
         const layout = try self.vulkan.device.createPipelineLayout(&layout_info, null);
         errdefer self.vulkan.device.destroyPipelineLayout(layout, null);
 
+        const depth_stencil = vk.PipelineDepthStencilStateCreateInfo{
+            .depth_test_enable = if (self.depth_test) .true else .false,
+            .depth_write_enable = if (self.depth_write) .true else .false,
+            .depth_compare_op = self.depth_compare_op.toVk(),
+            .depth_bounds_test_enable = .false,
+            .stencil_test_enable = .false,
+            .front = std.mem.zeroes(vk.StencilOpState),
+            .back = std.mem.zeroes(vk.StencilOpState),
+            .min_depth_bounds = 0.0,
+            .max_depth_bounds = 1.0,
+        };
+
         const color_fmt = self.color_format_override orelse self.vulkan.swapchain.surface_format.format;
         const rendering_info = vk.PipelineRenderingCreateInfo{
             .color_attachment_count = 1,
             .p_color_attachment_formats = @ptrCast(&color_fmt),
-            .depth_attachment_format = .undefined,
+            .depth_attachment_format = self.depth_format,
             .stencil_attachment_format = .undefined,
             .view_mask = 0,
         };
@@ -690,6 +738,7 @@ pub const PipelineBuilder = struct {
             .subpass = 0,
             .base_pipeline_handle = .null_handle,
             .base_pipeline_index = -1,
+            .p_depth_stencil_state = &depth_stencil,
         };
 
         var pipeline: vk.Pipeline = undefined;

@@ -3,6 +3,7 @@ const std = @import("std");
 const vulkan = @import("vulkan.zig");
 const eggy = @import("../eggy.zig");
 const sdl = @import("sdl3");
+const texture = @import("texture.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -14,7 +15,7 @@ pub const Swapchain = struct {
     swapchain_images: std.ArrayList(vk.Image),
     surface_format: vk.SurfaceFormatKHR,
     swapchain_extent: vk.Extent2D,
-    image_views: std.ArrayList(vk.ImageView),
+    image_views: std.ArrayList(texture.TextureView),
 
     /// Recreates the existing swapchain
     pub fn recreate(self: *@This(), e_vulkan: *vulkan.EggyVulkanInterface) !void {
@@ -31,7 +32,7 @@ pub const Swapchain = struct {
 
     pub fn cleanup(self: *@This()) void {
         for (self.image_views.items) |view| {
-            self.device.destroyImageView(view, null);
+            self.device.destroyImageView(view.image_view, null);
         }
         self.image_views.clearAndFree(self.allocator);
         self.swapchain_images.clearAndFree(self.allocator);
@@ -80,21 +81,10 @@ pub const Swapchain = struct {
 
         self.image_views = .empty;
         for (swapchain_images) |image| {
-            const image_view_create_info = vk.ImageViewCreateInfo{
-                .image = image,
-                .view_type = .@"2d",
-                .format = self.surface_format.format,
-                .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
-                .subresource_range = .{
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = 0,
-                    .level_count = 1,
-                    .base_array_layer = 0,
-                    .layer_count = 1,
-                },
-            };
-            const image_view = try e_vulkan.device.createImageView(&image_view_create_info, null);
-            try self.image_views.append(e_vulkan.allocator, image_view);
+            const view = try texture.TextureView.initFromVKImage(e_vulkan, image, .{
+                .format = self.surface_format.format
+            });
+            try self.image_views.append(e_vulkan.allocator, view);
         }
 
         std.log.debug("Created swapchain with {d} images", .{swapchain_images.len});

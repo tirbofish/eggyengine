@@ -16,6 +16,11 @@ pub const WindowingModuleOptions = struct {
     frame_rate: FrameRateMode = .unlimited,
 };
 
+pub const WindowResizedEvent = struct {
+    width: u32,
+    height: u32,
+};
+
 pub fn WindowingModule(comptime options: WindowingModuleOptions, comptime sdl_backend: eggy.module.rendering.SdlBackend) type {
     const FramerateCapper = sdl.extras.FramerateCapper(f32);
 
@@ -80,6 +85,10 @@ pub fn WindowingModule(comptime options: WindowingModuleOptions, comptime sdl_ba
         }
 
         fn pollEvents(self: *@This(), ctx: *eggy.Context) !void {
+            if (ctx.world.getResource(eggy.ecs.Events(WindowResizedEvent))) |events| {
+                events.drain();
+            }
+
             // non-gpu backends cannot use the standard `Window.updateSurface` function otherwise it crashes the app
             if (sdl_backend != .vulkan and sdl_backend != .opengl) {
                 _ = try self.window.getSurface();
@@ -94,6 +103,13 @@ pub fn WindowingModule(comptime options: WindowingModuleOptions, comptime sdl_ba
                 switch (event) {
                     .quit, .terminating => {
                         ctx.quit();
+                    },
+
+                    .window_resized => |wev| {
+                        try ctx.world.insertResource(eggy.ecs.Events(WindowResizedEvent).init(ctx.proc_init.gpa));
+                        if (ctx.world.getResource(eggy.ecs.Events(WindowResizedEvent))) |events| {
+                            events.send(.{ .width = @intCast(wev.width), .height = @intCast(wev.height) });
+                        }
                     },
 
                     .key_down => |kev| {
