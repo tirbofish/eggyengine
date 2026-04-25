@@ -13,7 +13,7 @@ const shaders = [_]ShaderEntry{
     .{ .name = "shader.slang", .entries = &.{ "vertMain", "fragMain" } },
 };
 
-pub fn addShaderBuildStep(b: *std.Build) *std.Build.Step {
+pub fn addShaderBuildStep(b: *std.Build, eggy_dep: *std.Build.Dependency) *std.Build.Step {
     const shader_step = b.step("shaders", "Compile Slang shaders to SPIR-V");
 
     const slangc_path = findSlangc(b) orelse {
@@ -21,8 +21,8 @@ pub fn addShaderBuildStep(b: *std.Build) *std.Build.Step {
         return shader_step;
     };
 
-    const shaders_dir = b.path("src/engine/shaders");
-    const output_dir = "zig-out/bin/shaders";
+    const shaders_dir = eggy_dep.path("shaders");
+    const output_dir = b.getInstallPath(.bin, "shaders");
 
     const mkdir_cmd = b.addSystemCommand(&.{ "mkdir", "-p", output_dir });
 

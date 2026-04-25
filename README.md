@@ -4,7 +4,7 @@ a modular game engine built in zig, vulkan (with slang shaders), sdl3, with a fe
 
 # dependencies
 
-currently, the current available zig version is `0.15.2`. 
+currently, the current available zig version is `0.16.0`. 
 
 for vulkan, you need the sdk (and subsequently the validation headers if enabled, which would be yes by default). 
 

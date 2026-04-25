@@ -165,14 +165,17 @@ pub fn Vector3(comptime T: type) type {
         pub const left = Self{ .x = -1, .y = 0, .z = 0 };
         pub const right = unit_x;
 
+        /// Create a new vector by defining each value
         pub fn init(x: T, y: T, z: T) Self {
             return .{ .x = x, .y = y, .z = z };
         }
 
+        /// Create a new vector with all values set to T
         pub fn splat(value: T) Self {
             return .{ .x = value, .y = value, .z = value };
         }
 
+        /// Create a new vector from an 3 element array. 
         pub fn fromArray(arr: [3]T) Self {
             return .{ .x = arr[0], .y = arr[1], .z = arr[2] };
         }
@@ -181,10 +184,12 @@ pub fn Vector3(comptime T: type) type {
             return .{ self.x, self.y, self.z };
         }
 
+        /// Convert to a SIMD zig-native `@Vector` type
         fn toVec(self: Self) Vec {
             return .{ self.x, self.y, self.z, 0 };
         }
 
+        /// Create a new eggy Vector from `@Vector` type. 
         fn fromVec(v: Vec) Self {
             return .{ .x = v[0], .y = v[1], .z = v[2] };
         }

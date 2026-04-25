@@ -1,3 +1,5 @@
+import camera;
+
 struct VertexInput {
     float3 inPosition;
     float3 inColour;
@@ -10,13 +12,7 @@ struct VertexOutput {
     float2 fragTexCoord;
 };
 
-struct UniformBuffer {
-    float4x4 model;
-    float4x4 view;
-    float4x4 proj;
-};
-
-ConstantBuffer<UniformBuffer> ubo;
+ConstantBuffer<Camera3D> ubo;
 
 [shader("vertex")]
 VertexOutput vertMain(VertexInput input) {
