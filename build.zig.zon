@@ -5,6 +5,12 @@
         .game = .{
             .path = "src/game",
         },
+        .eggy = .{
+            .path = "src/eggy",
+        },
+        .teenygltf = .{
+            .path = "src/teenygltf",
+        },
     },
     .paths = .{""},
     .fingerprint = 0x16f2cc5bea40dcd1,
