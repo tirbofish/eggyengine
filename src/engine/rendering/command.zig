@@ -194,10 +194,7 @@ pub const CommandBuffer = struct {
     }
 
     /// Bind a descriptor set for the current frame.
-    ///
-    /// The `resource` argument must have a `descriptor_sets` field
-    /// (UniformBuffer, StorageBuffer, Texture, etc).
-    pub fn bindDescriptor(self: *@This(), resource: anytype, p: pipeline.Pipeline) void {
+    pub fn bindDescriptor(self: *@This(), resource: buffer.DescriptorSetResource, p: pipeline.Pipeline) void {
         const descriptor_set = resource.descriptor_sets[self.frame_index];
         self.e_vulkan.device.cmdBindDescriptorSets(
             self.cmd,

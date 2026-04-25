@@ -34,6 +34,7 @@ pub const UBO = struct {
 pub const Vertex = struct {
     position: eggy.math.Vec2,
     colour: eggy.colour.Colour,
+    tex_coord: eggy.math.Vec2,
 
     pub fn getBindingDescription() pipeline.VertexBinding {
         return .{
@@ -43,7 +44,7 @@ pub const Vertex = struct {
         };
     }
 
-    pub fn getAttributeDescriptions() [2]pipeline.VertexAttribute {
+    pub fn getAttributeDescriptions() [3]pipeline.VertexAttribute {
         return .{
             .{
                 .location = 0,
@@ -57,6 +58,12 @@ pub const Vertex = struct {
                 .format = .float3,
                 .offset = @offsetOf(Vertex, "colour"),
             },
+            .{
+                .location = 2,
+                .binding = 0,
+                .format = .float2,
+                .offset = @offsetOf(Vertex, "tex_coord"),
+            },
         };
     }
 };
@@ -65,19 +72,23 @@ pub const VKModule = struct {
     const vertices = [_]Vertex {
         .{
             .position = eggy.math.Vec2.init(-0.5, -0.5),
-            .colour = eggy.colour.Colour.from_f32(1.0, 0.0, 0.0)
+            .colour = eggy.colour.Colour.from_f32(1.0, 0.0, 0.0),
+            .tex_coord = eggy.math.Vec2.init(1.0, 0.0),
         },
         .{
             .position = eggy.math.Vec2.init(0.5, -0.5),
-            .colour = eggy.colour.Colour.from_f32(0.0, 1.0, 0.0)
+            .colour = eggy.colour.Colour.from_f32(0.0, 1.0, 0.0),
+            .tex_coord = eggy.math.Vec2.init(0.0, 0.0),
         },
         .{
             .position = eggy.math.Vec2.init(0.5, 0.5),
-            .colour = eggy.colour.Colour.from_f32(0.0, 0.0, 1.0)
+            .colour = eggy.colour.Colour.from_f32(0.0, 0.0, 1.0),
+            .tex_coord = eggy.math.Vec2.init(0.0, 1.0),
         },
         .{
             .position = eggy.math.Vec2.init(-0.5, 0.5),
-            .colour = eggy.colour.Colour.from_f32(1.0, 1.0, 1.0)
+            .colour = eggy.colour.Colour.from_f32(1.0, 1.0, 1.0),
+            .tex_coord = eggy.math.Vec2.init(1.0, 1.0),
         },
     };
     const indices = [_]u16 {
@@ -94,6 +105,8 @@ pub const VKModule = struct {
 
     ubo: UBO = undefined,
     image: rendering.texture.Texture = undefined,
+
+    descriptors: rendering.buffer.DescriptorSetResource = undefined,
 
     pub const schedules = .{
         .init = .{init},
@@ -119,6 +132,7 @@ pub const VKModule = struct {
             .vertexShader(shader.module, "vertMain")
             .fragmentShader(shader.module, "fragMain")
             .addDescriptorBinding(.uniformBuffer(0, .{ .vertex = true }))
+            .addDescriptorBinding(.combinedImageSampler(1, .{ .fragment = true }))
             .topology(.triangle_list)
             .cullMode(.back)
             .frontFace(.counter_clockwise)
@@ -126,12 +140,18 @@ pub const VKModule = struct {
             .addVertexBinding(Vertex.getBindingDescription())
             .addVertexAttributes(&Vertex.getAttributeDescriptions())
             .build();
-        
+
         self.vertex_buffer = try rendering.buffer.VertexBuffer(Vertex).init(vulkan, &vertices, "quad vertex buffer");
         self.index_buffer = try rendering.buffer.IndexBuffer(u16).init(vulkan, &indices, "quad index buffer");
 
-        self.uniform_buffer = try rendering.buffer.UniformBuffer(UBO).init(vulkan, self.pipeline, "uniform buffer");
+        self.uniform_buffer = try rendering.buffer.UniformBuffer(UBO).init(vulkan, "uniform buffer");
         self.image = try rendering.texture.Texture.initFromMemory(ctx, vulkan, file, "flight image");
+
+        self.descriptors = try rendering.buffer.DescriptorSetResource.init(vulkan, self.pipeline, &.{
+            .{ .buffer = .{ .binding = 0, .buffer = self.uniform_buffer.raw.buffer, .size = self.uniform_buffer.raw.size } },
+            .{ .image = .{ .binding = 1, .sampler = self.image.sampler, .image_view = self.image.image_view } },
+        });
+
         self.start_time = @intCast(std.Io.Clock.now(.awake, ctx.proc_init.io).nanoseconds);
     }
 
@@ -195,7 +215,7 @@ pub const VKModule = struct {
         command_buffer.bindPipeline(self.pipeline);
         command_buffer.bindVertexBuffer(self.vertex_buffer);
         command_buffer.bindIndexBuffer(self.index_buffer, .uint16);
-        command_buffer.bindDescriptor(self.uniform_buffer, self.pipeline);
+        command_buffer.bindDescriptor(self.descriptors, self.pipeline);
         command_buffer.drawIndexed(indices.len, 1, 0, 0, 0);
 
         command_buffer.endRendering();
@@ -216,6 +236,7 @@ pub const VKModule = struct {
         self.vertex_buffer.deinit();
         self.index_buffer.deinit();
         self.uniform_buffer.deinit();
+        self.descriptors.deinit();
         self.pipeline.deinit();
     }
 };

@@ -10,8 +10,11 @@ const Context = @import("../ctx.zig").Context;
 pub const Texture = struct {
     e_vulkan: *rendering.EggyVulkanInterface,
 
-    texture: vk.Image,
-    texture_mem: vk.DeviceMemory,
+    texture: vk.Image = undefined,
+    texture_mem: vk.DeviceMemory = undefined,
+
+    image_view: vk.ImageView = undefined,
+    sampler: vk.Sampler = undefined,
 
     pub fn initFromFile(ctx: *Context, e_vulkan: *rendering.EggyVulkanInterface, file: std.Io.File, label: ?[*:0]const u8) !Texture {
         var read_buffer: [zigimg.io.DEFAULT_BUFFER_SIZE]u8 = undefined;
@@ -32,8 +35,6 @@ pub const Texture = struct {
 
         var self = Texture{
             .e_vulkan = e_vulkan,
-            .texture = undefined,
-            .texture_mem = undefined,
         };
 
         // ensure staging buffer has image uploaded
@@ -70,6 +71,9 @@ pub const Texture = struct {
         command_buffer.transitionImageLayout(self, .transfer_dst_optimal, .shader_read_only_optimal);
         command_buffer.end();
 
+        try createImageView(&self, .r8g8b8a8_srgb);
+        try createSampler(&self);
+
         return self;
     }
 
@@ -99,7 +103,50 @@ pub const Texture = struct {
         try self.e_vulkan.device.bindImageMemory(self.texture, self.texture_mem, 0);
     }
 
+    fn createImageView(self: *@This(), format: vk.Format) !void {
+        const view_info = vk.ImageViewCreateInfo {
+            .image = self.texture,
+            .view_type = .@"2d",
+            .format = format,
+            .subresource_range = .{ 
+                .aspect_mask = .{ .color_bit = true }, 
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+            .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
+        };
+
+        self.image_view = try self.e_vulkan.device.createImageView(&view_info, null);
+    }
+
+    fn createSampler(self: *@This()) !void {
+        const properties = self.e_vulkan.instance.getPhysicalDeviceProperties(self.e_vulkan.pdev);
+        const sampler_info = vk.SamplerCreateInfo {
+            .mag_filter = .linear,
+            .min_filter = .linear,
+            .address_mode_u = .repeat,
+            .address_mode_v = .repeat,
+            .address_mode_w = .repeat,
+            .anisotropy_enable = .true,
+            .max_anisotropy = properties.limits.max_sampler_anisotropy,
+            .border_color = .int_opaque_black,
+            .unnormalized_coordinates = .false,
+            .compare_enable = .false,
+            .compare_op = .always,
+            .mipmap_mode = .linear,
+            .mip_lod_bias = 0.0,
+            .min_lod = 0.0,
+            .max_lod = 0.0,
+        };
+        self.sampler = try self.e_vulkan.device.createSampler(&sampler_info, null);
+    }
+
     pub fn deinit(self: *@This()) void {
+        self.e_vulkan.device.destroySampler(self.sampler, null);
+        self.e_vulkan.device.destroyImageView(self.image_view, null);
+
         self.e_vulkan.device.destroyImage(self.texture, null);
         self.e_vulkan.device.freeMemory(self.texture_mem, null);
     }

@@ -401,109 +401,178 @@ pub fn IndexBuffer(comptime T: type) type {
 /// In the shader-slang, this would be a `ConstantBuffer<T> foo;`
 pub fn UniformBuffer(comptime T: type) type {
     return struct {
-        comptime {
-            checkAlignment(T);
-        }
+        comptime { checkAlignment(T); }
         raw: RawBuffer,
         mapped: [*]T,
 
-        descriptor_pool: vk.DescriptorPool,
-        descriptor_sets: [rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT]vk.DescriptorSet,
-
-        /// Create a uniform buffer bound to a pipeline's descriptor set layout.
-        pub fn init(e_vulkan: *rendering.EggyVulkanInterface, p: pipeline.Pipeline, label: ?[*:0]const u8) !@This() {
-            const descriptor_set_layout = p.descriptor_set_layout;
+        pub fn init(e_vulkan: *rendering.EggyVulkanInterface, label: ?[*:0]const u8) !@This() {
             const size: vk.DeviceSize = @sizeOf(T);
-
             const raw = try RawBuffer.init(e_vulkan, size, .{ .UniformBuffer = true }, .{
                 .HostVisible = true,
                 .HostCoherent = true,
             }, label);
-            errdefer raw.deinit();
-
             const mapped_ptr = try e_vulkan.device.mapMemory(raw.mem, 0, size, .{});
-            const mapped: [*]T = @ptrCast(@alignCast(mapped_ptr));
-
-            const pool_size = vk.DescriptorPoolSize{
-                .descriptor_count = rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT,
-                .type = .uniform_buffer,
-            };
-
-            const pool_info = vk.DescriptorPoolCreateInfo{
-                .flags = .{},
-                .max_sets = rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT,
-                .pool_size_count = 1,
-                .p_pool_sizes = @ptrCast(&pool_size),
-            };
-
-            const descriptor_pool = try e_vulkan.device.createDescriptorPool(&pool_info, null);
-            errdefer e_vulkan.device.destroyDescriptorPool(descriptor_pool, null);
-
-            var layouts: [rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT]vk.DescriptorSetLayout = undefined;
-            for (&layouts) |*layout| {
-                layout.* = descriptor_set_layout;
-            }
-
-            const alloc_info = vk.DescriptorSetAllocateInfo{
-                .descriptor_pool = descriptor_pool,
-                .descriptor_set_count = rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT,
-                .p_set_layouts = &layouts,
-            };
-
-            var descriptor_sets: [rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT]vk.DescriptorSet = undefined;
-            try e_vulkan.device.allocateDescriptorSets(&alloc_info, &descriptor_sets);
-
-            for (0..rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT) |i| {
-                const buffer_info = vk.DescriptorBufferInfo{
-                    .buffer = raw.buffer,
-                    .offset = 0,
-                    .range = @sizeOf(T),
-                };
-
-                const descriptor_write = vk.WriteDescriptorSet{
-                    .dst_set = descriptor_sets[i],
-                    .dst_binding = 0,
-                    .dst_array_element = 0,
-                    .descriptor_count = 1,
-                    .descriptor_type = .uniform_buffer,
-                    .p_buffer_info = @ptrCast(&buffer_info),
-                    .p_image_info = undefined,
-                    .p_texel_buffer_view = undefined,
-                };
-
-                e_vulkan.device.updateDescriptorSets(&.{descriptor_write}, null);
-            }
-
-            // try logger.tracef("Initialised new UniformBuffer");
-
-            return .{
-                .raw = raw,
-                .mapped = mapped,
-                .descriptor_pool = descriptor_pool,
-                .descriptor_sets = descriptor_sets,
-            };
+            return .{ .raw = raw, .mapped = @ptrCast(@alignCast(mapped_ptr)) };
         }
 
-        /// Write data to the uniform buffer
-        pub fn write(self: *@This(), data: T) void {
-            self.mapped[0] = data;
-        }
-
-        /// Get a pointer to the mapped data for direct modification.
-        pub fn getData(self: *@This()) *T {
-            return &self.mapped[0];
-        }
-
-        /// Get the descriptor set for the current frame.
-        pub fn getDescriptorSet(self: *@This(), frame_index: usize) vk.DescriptorSet {
-            return self.descriptor_sets[frame_index];
-        }
+        pub fn write(self: *@This(), data: T) void { self.mapped[0] = data; }
+        pub fn getData(self: *@This()) *T { return &self.mapped[0]; }
 
         pub fn deinit(self: *@This()) void {
-            self.raw.e_vulkan.device.destroyDescriptorPool(self.descriptor_pool, null);
             self.raw.e_vulkan.device.unmapMemory(self.raw.mem);
             self.raw.e_vulkan.await() catch {};
             self.raw.deinit();
         }
     };
 }
+
+pub const DescriptorSetResource = struct {
+    e_vulkan: *rendering.EggyVulkanInterface,
+    descriptor_pool: vk.DescriptorPool,
+    descriptor_sets: [rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT]vk.DescriptorSet,
+
+    pub const Binding = union(enum) {
+        buffer: struct {
+            binding: u32,
+            buffer: vk.Buffer,
+            size: vk.DeviceSize,
+            descriptor_type: vk.DescriptorType = .uniform_buffer,
+        },
+        image: struct {
+            binding: u32,
+            sampler: vk.Sampler,
+            image_view: vk.ImageView,
+            layout: vk.ImageLayout = .shader_read_only_optimal,
+            descriptor_type: vk.DescriptorType = .combined_image_sampler,
+        },
+    };
+
+    pub fn init(
+        e_vulkan: *rendering.EggyVulkanInterface,
+        p: pipeline.Pipeline,
+        bindings: []const Binding,
+    ) !@This() {
+        // Count how many of each descriptor type we need for pool sizes
+        var uniform_buffer_count: u32 = 0;
+        var storage_buffer_count: u32 = 0;
+        var combined_image_sampler_count: u32 = 0;
+        var sampled_image_count: u32 = 0;
+        var storage_image_count: u32 = 0;
+
+        for (bindings) |b| {
+            switch (b) {
+                .buffer => |buf| switch (buf.descriptor_type) {
+                    .uniform_buffer, .uniform_buffer_dynamic => uniform_buffer_count += 1,
+                    .storage_buffer, .storage_buffer_dynamic => storage_buffer_count += 1,
+                    else => {},
+                },
+                .image => |img| switch (img.descriptor_type) {
+                    .combined_image_sampler => combined_image_sampler_count += 1,
+                    .sampled_image => sampled_image_count += 1,
+                    .storage_image => storage_image_count += 1,
+                    else => {},
+                },
+            }
+        }
+
+        var pool_sizes_buf: [5]vk.DescriptorPoolSize = undefined;
+        var pool_size_count: u32 = 0;
+        const frames = rendering.EggyVulkanInterface.MAX_FRAMES_IN_FLIGHT;
+
+        if (uniform_buffer_count > 0) {
+            pool_sizes_buf[pool_size_count] = .{ .type = .uniform_buffer, .descriptor_count = uniform_buffer_count * frames };
+            pool_size_count += 1;
+        }
+        if (storage_buffer_count > 0) {
+            pool_sizes_buf[pool_size_count] = .{ .type = .storage_buffer, .descriptor_count = storage_buffer_count * frames };
+            pool_size_count += 1;
+        }
+        if (combined_image_sampler_count > 0) {
+            pool_sizes_buf[pool_size_count] = .{ .type = .combined_image_sampler, .descriptor_count = combined_image_sampler_count * frames };
+            pool_size_count += 1;
+        }
+        if (sampled_image_count > 0) {
+            pool_sizes_buf[pool_size_count] = .{ .type = .sampled_image, .descriptor_count = sampled_image_count * frames };
+            pool_size_count += 1;
+        }
+        if (storage_image_count > 0) {
+            pool_sizes_buf[pool_size_count] = .{ .type = .storage_image, .descriptor_count = storage_image_count * frames };
+            pool_size_count += 1;
+        }
+
+        const descriptor_pool = try e_vulkan.device.createDescriptorPool(&.{
+            .flags = .{},
+            .max_sets = frames,
+            .pool_size_count = pool_size_count,
+            .p_pool_sizes = &pool_sizes_buf,
+        }, null);
+        errdefer e_vulkan.device.destroyDescriptorPool(descriptor_pool, null);
+
+        var layouts: [frames]vk.DescriptorSetLayout = undefined;
+        for (&layouts) |*l| l.* = p.descriptor_set_layout;
+
+        var descriptor_sets: [frames]vk.DescriptorSet = undefined;
+        try e_vulkan.device.allocateDescriptorSets(&.{
+            .descriptor_pool = descriptor_pool,
+            .descriptor_set_count = frames,
+            .p_set_layouts = &layouts,
+        }, &descriptor_sets);
+
+        // Write descriptors for each frame
+        for (0..frames) |i| {
+            var writes_buf: [16]vk.WriteDescriptorSet = undefined;
+            var buffer_infos: [16]vk.DescriptorBufferInfo = undefined;
+            var image_infos: [16]vk.DescriptorImageInfo = undefined;
+
+            for (bindings, 0..) |b, j| {
+                switch (b) {
+                    .buffer => |buf| {
+                        buffer_infos[j] = .{
+                            .buffer = buf.buffer,
+                            .offset = 0,
+                            .range = buf.size,
+                        };
+                        writes_buf[j] = .{
+                            .dst_set = descriptor_sets[i],
+                            .dst_binding = buf.binding,
+                            .dst_array_element = 0,
+                            .descriptor_count = 1,
+                            .descriptor_type = buf.descriptor_type,
+                            .p_buffer_info = @ptrCast(&buffer_infos[j]),
+                            .p_image_info = undefined,
+                            .p_texel_buffer_view = undefined,
+                        };
+                    },
+                    .image => |img| {
+                        image_infos[j] = .{
+                            .sampler = img.sampler,
+                            .image_view = img.image_view,
+                            .image_layout = img.layout,
+                        };
+                        writes_buf[j] = .{
+                            .dst_set = descriptor_sets[i],
+                            .dst_binding = img.binding,
+                            .dst_array_element = 0,
+                            .descriptor_count = 1,
+                            .descriptor_type = img.descriptor_type,
+                            .p_buffer_info = undefined,
+                            .p_image_info = @ptrCast(&image_infos[j]),
+                            .p_texel_buffer_view = undefined,
+                        };
+                    },
+                }
+            }
+            e_vulkan.device.updateDescriptorSets(writes_buf[0..bindings.len], null);
+        }
+
+        return .{
+            .e_vulkan = e_vulkan,
+            .descriptor_pool = descriptor_pool,
+            .descriptor_sets = descriptor_sets,
+        };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        self.e_vulkan.device.destroyDescriptorPool(self.descriptor_pool, null);
+    }
+};

@@ -310,23 +310,63 @@ pub const EggyVulkanInterface = struct {
     }
 
     fn isDeviceSuitable(self: *@This(), device: vk.PhysicalDevice) !bool {
-        // check for queue families
+        // Check if the device supports Vulkan 1.3+
+        const props = self.instance.getPhysicalDeviceProperties(device);
+        if (props.api_version < vk.API_VERSION_1_3.toU32()) {
+            return false;
+        }
+
+        // Check if any queue family supports graphics + present
         const queue_families = try self.instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(device, self.allocator);
         defer self.allocator.free(queue_families);
 
-        var has_graphics_queue = false;
+        var has_suitable_queue = false;
         for (queue_families, 0..) |family, i| {
             if (family.queue_flags.graphics_bit) {
-                has_graphics_queue = true;
-                // also check for present support
-                const present_support = self.instance.getPhysicalDeviceSurfaceSupportKHR(device, @intCast(i), self.surface) catch vk.Bool32.false;
-                if (present_support == vk.Bool32.true) {
-                    return true;
+                const present_support = self.instance.getPhysicalDeviceSurfaceSupportKHR(device, @intCast(i), self.surface) catch .false;
+                if (present_support == .true) {
+                    has_suitable_queue = true;
+                    break;
                 }
             }
         }
+        if (!has_suitable_queue) return false;
 
-        return has_graphics_queue;
+        // Check required device extensions
+        const required_extensions = [_][*:0]const u8{
+            vk.extensions.khr_swapchain.name,
+        };
+
+        const available_extensions = try self.instance.enumerateDeviceExtensionPropertiesAlloc(device, null, self.allocator);
+        defer self.allocator.free(available_extensions);
+
+        for (required_extensions) |required| {
+            var found = false;
+            for (available_extensions) |available| {
+                if (std.mem.eql(u8, std.mem.span(required), std.mem.sliceTo(&available.extension_name, 0))) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+        }
+
+        // Check required device features
+        var extended_dynamic_state_features = vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT{};
+        var vulkan13_features = vk.PhysicalDeviceVulkan13Features{
+            .p_next = @ptrCast(&extended_dynamic_state_features),
+        };
+        var features2 = vk.PhysicalDeviceFeatures2{
+            .p_next = @ptrCast(&vulkan13_features),
+            .features = .{}
+        };
+        self.instance.getPhysicalDeviceFeatures2(device, &features2);
+
+        if (features2.features.sampler_anisotropy != .true) return false;
+        if (vulkan13_features.dynamic_rendering != .true) return false;
+        if (extended_dynamic_state_features.extended_dynamic_state != .true) return false;
+
+        return true;
     }
 
     fn createLogicalDevice(self: *@This()) !void {
@@ -369,11 +409,14 @@ pub const EggyVulkanInterface = struct {
         var vulkan13_features = vk.PhysicalDeviceVulkan13Features{
             .p_next = @ptrCast(&vulkan11_features),
             .dynamic_rendering = .true,
+            .synchronization_2 = .true,
         };
 
         var features2 = vk.PhysicalDeviceFeatures2{
             .p_next = @ptrCast(&vulkan13_features),
-            .features = .{},
+            .features = .{
+                .sampler_anisotropy = .true,
+            },
         };
 
         self.instance.getPhysicalDeviceFeatures2(self.pdev, &features2);
@@ -401,15 +444,6 @@ pub const EggyVulkanInterface = struct {
         const device_wrapper = try self.allocator.create(vk.DeviceWrapper);
 
         device_wrapper.* = vk.DeviceWrapper.load(device_handle, get_device_proc_addr);
-
-        if (device_wrapper.dispatch.vkCreateGraphicsPipelines == null) {
-            std.log.err("vkCreateGraphicsPipelines is NULL right after loading!", .{});
-            std.log.err("vkCreateComputePipelines null: {}", .{device_wrapper.dispatch.vkCreateComputePipelines == null});
-            std.log.err("vkCreatePipelineLayout null: {}", .{device_wrapper.dispatch.vkCreatePipelineLayout == null});
-            std.log.err("vkDestroyPipeline null: {}", .{device_wrapper.dispatch.vkDestroyPipeline == null});
-        } else {
-            std.log.debug("vkCreateGraphicsPipelines loaded OK", .{});
-        }
 
         self.device = vk.DeviceProxy.init(device_handle, device_wrapper);
 
