@@ -7,9 +7,11 @@
         },
         .eggy = .{
             .path = "src/eggy",
+            .lazy = true,
         },
         .teenygltf = .{
             .path = "src/teenygltf",
+            .lazy = true,
         },
     },
     .paths = .{""},

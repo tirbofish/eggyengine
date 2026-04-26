@@ -3,11 +3,15 @@
     .version = "0.0.0",
     .fingerprint = 0xc441221f0a863019,
     .minimum_zig_version = "0.16.0",
-    .dependencies = .{},
+    .dependencies = .{
+        .tinygltf3 = .{
+            .url = "https://github.com/syoyo/tinygltf/archive/refs/tags/v3.0.0.tar.gz",
+            .hash = "N-V-__8AAGOqhAFz-HxgLye7Dv4_7i8kpvhBFmmdTXhy5cO9",
+        }
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
-        "headers",
     },
 }

@@ -1,6 +1,6 @@
 # eggyengine
 
-a modular game engine built in zig, vulkan (with slang shaders), sdl3, with a feel familiar to that of Bevy and its ECS systems. 
+a data-driven modular game engine built in zig, vulkan (with slang shaders), sdl3, with a feel familiar to that of Bevy and its ECS systems. 
 
 # dependencies
 

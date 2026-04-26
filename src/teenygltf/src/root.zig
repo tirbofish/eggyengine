@@ -1,5 +1,5 @@
 pub const c = @cImport({
-    @cInclude("../headers/tiny_gltf_v3.h");
+    @cInclude("tiny_gltf_v3.h");
 });
 
 const std = @import("std");
@@ -90,6 +90,6 @@ test "parse minimal valid gltf" {
     var errors = result.errors;
     defer modelFree(&model);
     defer errorStackFree(&errors);
-    // Minimal glTF should parse without errors
+
     try testing.expectEqual(@as(i32, 0), errors.has_error);
 }

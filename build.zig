@@ -22,20 +22,21 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     // --- eggy (library) ---
-    const eggy = b.dependency("eggy", .{
+    const eggy_step = b.step("eggy", "Build the eggy engine library");
+    if (b.lazyDependency("eggy", .{
         .target = target,
         .optimize = optimize,
-    });
-    _ = eggy;
-
-    const eggy_step = b.step("eggy", "Build the eggy engine library");
-    eggy_step.dependOn(b.getInstallStep());
+    })) |eggy| {
+        _ = eggy;
+        eggy_step.dependOn(b.getInstallStep());
+    }
 
     // --- teenygltf (library) ---
-    const teenygltf = b.dependency("teenygltf", .{
+    const teenygltf_step = b.step("teenygltf", "Build the teenygltf library");
+    if (b.lazyDependency("teenygltf", .{
         .target = target,
         .optimize = optimize,
-    });
-    const teenygltf_step = b.step("teenygltf", "Build the teenygltf library");
-    teenygltf_step.dependOn(&b.addInstallArtifact(teenygltf.artifact("tinygltf3"), .{}).step);
+    })) |teenygltf| {
+        teenygltf_step.dependOn(&b.addInstallArtifact(teenygltf.artifact("tinygltf3"), .{}).step);
+    }
 }
